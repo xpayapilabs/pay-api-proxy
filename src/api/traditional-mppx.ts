@@ -346,12 +346,15 @@ function importedOpenApiDocument(
   }
 
   for (const route of api.routes) {
-    const pathItem = isRecord(paths[route.path]) ? { ...(paths[route.path] as Record<string, unknown>) } : {};
+    if (!isRecord(paths[route.path])) {
+      // Imported OpenAPI is authoritative for route surface; do not append missing paths.
+      continue;
+    }
+    const pathItem = { ...(paths[route.path] as Record<string, unknown>) };
     for (const method of route.methods) {
       const methodKey = method.toLowerCase();
-      const existingOperation = isRecord(pathItem[methodKey])
-        ? { ...(pathItem[methodKey] as Record<string, unknown>) }
-        : {};
+      if (!isRecord(pathItem[methodKey])) continue;
+      const existingOperation = { ...(pathItem[methodKey] as Record<string, unknown>) };
       pathItem[methodKey] = paidOpenApiOperation(
         existingOperation,
         routePaymentInfo(api, config, route.requestPrice, route.id),
