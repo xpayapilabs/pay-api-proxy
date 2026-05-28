@@ -8,7 +8,7 @@ services:
       - .env
     volumes:
       - ./pay-api-proxy.config.jsonc:/app/pay-api-proxy.config.jsonc:ro
-      - pay-api-proxy-data:/app/data
+      - ./data:/app/data
     ports:
       - "${APP_BIND:-127.0.0.1:8787}:8080"
     extra_hosts:
@@ -32,7 +32,7 @@ services:
       - .env
     volumes:
       - ./pay-api-proxy.config.jsonc:/app/pay-api-proxy.config.jsonc:ro
-      - pay-api-proxy-data:/app/data
+      - ./data:/app/data
     depends_on:
       app:
         condition: service_healthy
@@ -77,6 +77,5 @@ services:
         condition: service_healthy
 
 volumes:
-  pay-api-proxy-data:
   caddy-data:
   caddy-config:
