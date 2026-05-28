@@ -1,0 +1,48 @@
+{
+  "host": "127.0.0.1",
+  "port": 18080,
+  "databasePath": "./data/local-http-test.sqlite",
+  "paymentProvider": "tempo-testnet",
+  "upstreamProvider": "http",
+  "chargingMethod": "per-request",
+  "publicBaseUrl": "http://127.0.0.1:18080",
+
+  "mppxSession": {
+    "enabled": false,
+    "waitForConfirmation": false
+  },
+
+  "traditionalApis": [{
+    "id": "smoke",
+    "enabled": true,
+    "upstreamBaseUrl": "http://127.0.0.1:18081",
+
+    "bearer": "upstream-smoke-token",
+    "headers": {
+      "x-api-key": "upstream-smoke-key"
+    },
+
+    "methods": ["GET", "POST"],
+    "requestPrice": "500",
+
+    "routes": [{
+      "id": "quote",
+      "path": "/v1/quote",
+      "methods": ["GET", "POST"],
+      "requestPrice": "750"
+    }],
+
+    "forwardedHeaders": ["accept", "content-type", "x-request-id"],
+    "assetSymbol": "pathUSD",
+    "assetAddress": "0x20c0000000000000000000000000000000000000",
+    "chainId": 42431
+  }],
+
+  "tempo": {
+    "rpcUrl": "https://rpc.moderato.tempo.xyz",
+    "chainId": 42431,
+    "settlementAddress": "0x1111111111111111111111111111111111111111",
+    "acceptedAsset": "0x20c0000000000000000000000000000000000000",
+    "assetDecimals": 6
+  }
+}

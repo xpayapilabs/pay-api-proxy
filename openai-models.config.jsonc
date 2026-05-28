@@ -1,0 +1,190 @@
+{
+  // OpenAI-compatible model override example. Copy the "models" array into
+  // pay-api-proxy.config.jsonc only when upstreamProvider is "openai" and you
+  // want to override the built-in defaults from src/core/models.ts.
+  // Paid model catalog. Providers can edit pricing here without touching code.
+  // Amounts are in the accepted asset, using normal decimals. Prices below are OpenAI
+  // standard short-context prices per 1M tokens, scanned from the OpenAI pricing/model
+  // docs on 2026-05-15. "minimum" is this node's per-request floor, not an OpenAI fee.
+  "models": [
+    {
+      "modelName": "gpt-5.5",
+      "pricing": {
+        "inputPerMillion": "5.00",
+        "cachedInputPerMillion": "0.50",
+        "outputPerMillion": "30.00",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 1050000,
+      "knowledgeCutoff": "2025-12-01"
+    },
+    {
+      "modelName": "gpt-5.5-pro",
+      "pricing": {
+        "inputPerMillion": "30.00",
+        "outputPerMillion": "180.00",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 1050000,
+      "knowledgeCutoff": "2025-12-01"
+    },
+    {
+      "modelName": "gpt-5.4",
+      "pricing": {
+        "inputPerMillion": "2.50",
+        "cachedInputPerMillion": "0.25",
+        "outputPerMillion": "15.00",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 1050000,
+      "knowledgeCutoff": "2025-08-31"
+    },
+    {
+      "modelName": "gpt-5.4-mini",
+      "pricing": {
+        "inputPerMillion": "0.75",
+        "cachedInputPerMillion": "0.075",
+        "outputPerMillion": "4.50",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 400000,
+      "knowledgeCutoff": "2025-08-31"
+    },
+    {
+      "modelName": "gpt-5.4-nano",
+      "pricing": {
+        "inputPerMillion": "0.20",
+        "cachedInputPerMillion": "0.02",
+        "outputPerMillion": "1.25",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 400000,
+      "knowledgeCutoff": "2025-08-31"
+    },
+    {
+      "modelName": "gpt-5.4-pro",
+      "pricing": {
+        "inputPerMillion": "30.00",
+        "outputPerMillion": "180.00",
+        "minimum": "0.001"
+      },
+      "defaultMaxTokens": 512,
+      "maxTokensLimit": 128000,
+      "contextWindow": 1050000,
+      "knowledgeCutoff": "2025-08-31"
+    },
+
+    // Image generation models. Routed through POST /v1/images/generations.
+    // Pricing scanned from https://developers.openai.com/api/docs/pricing on 2026-05-15.
+    // Per-token model: text input + image input + image output billed separately.
+    // imageMaxOutputTokens is the deterministic worst-case bound by (size, quality)
+    // used to reserve session funds upfront; settlement uses the upstream `usage`
+    // object's per-modality breakdown. Token tables for 1.x are from the image-generation
+    // guide; gpt-image-2 tokens are derived from the published per-image dollar prices
+    // ($0.006/$0.053/$0.211 for 1024x1024 low/medium/high at $30/M output).
+    //
+    // inputPerMillion / outputPerMillion are required by the parser but unused for
+    // image endpoints; set them to the equivalent image-text / image-output rates.
+    // cached input pricing is OpenAI's published rate; not yet applied at billing time.
+    {
+      "modelName": "gpt-image-2",
+      "pricing": {
+        "inputPerMillion": "5.00",
+        "cachedInputPerMillion": "1.25",
+        "outputPerMillion": "30.00",
+        "imageTextInputPerMillion": "5.00",
+        "imageInputPerMillion": "8.00",
+        "imageOutputPerMillion": "30.00",
+        "minimum": "0.001"
+      },
+      "imageMaxOutputTokens": {
+        "1024x1024-low": 200,
+        "1024x1024-medium": 1767,
+        "1024x1024-high": 7033,
+        "1024x1024-auto": 7033,
+        "1024x1536-low": 167,
+        "1024x1536-medium": 1367,
+        "1024x1536-high": 5500,
+        "1024x1536-auto": 5500,
+        "1536x1024-low": 167,
+        "1536x1024-medium": 1367,
+        "1536x1024-high": 5500,
+        "1536x1024-auto": 5500,
+        "auto-auto": 7033
+      },
+      "defaultMaxTokens": 1,
+      "maxTokensLimit": 1,
+      "knowledgeCutoff": "2025-12-01"
+    },
+    {
+      "modelName": "gpt-image-1.5",
+      "pricing": {
+        "inputPerMillion": "5.00",
+        "cachedInputPerMillion": "1.25",
+        "outputPerMillion": "32.00",
+        "imageTextInputPerMillion": "5.00",
+        "imageInputPerMillion": "8.00",
+        "imageOutputPerMillion": "32.00",
+        "minimum": "0.001"
+      },
+      "imageMaxOutputTokens": {
+        "1024x1024-low": 272,
+        "1024x1024-medium": 1056,
+        "1024x1024-high": 4160,
+        "1024x1024-auto": 4160,
+        "1024x1536-low": 408,
+        "1024x1536-medium": 1584,
+        "1024x1536-high": 6240,
+        "1024x1536-auto": 6240,
+        "1536x1024-low": 400,
+        "1536x1024-medium": 1568,
+        "1536x1024-high": 6208,
+        "1536x1024-auto": 6208,
+        "auto-auto": 6240
+      },
+      "defaultMaxTokens": 1,
+      "maxTokensLimit": 1,
+      "knowledgeCutoff": "2025-08-31"
+    },
+    {
+      "modelName": "gpt-image-1-mini",
+      "pricing": {
+        "inputPerMillion": "2.00",
+        "cachedInputPerMillion": "0.20",
+        "outputPerMillion": "8.00",
+        "imageTextInputPerMillion": "2.00",
+        "imageInputPerMillion": "2.50",
+        "imageOutputPerMillion": "8.00",
+        "minimum": "0.001"
+      },
+      "imageMaxOutputTokens": {
+        "1024x1024-low": 272,
+        "1024x1024-medium": 1056,
+        "1024x1024-high": 4160,
+        "1024x1024-auto": 4160,
+        "1024x1536-low": 408,
+        "1024x1536-medium": 1584,
+        "1024x1536-high": 6240,
+        "1024x1536-auto": 6240,
+        "1536x1024-low": 400,
+        "1536x1024-medium": 1568,
+        "1536x1024-high": 6208,
+        "1536x1024-auto": 6208,
+        "auto-auto": 6240
+      },
+      "defaultMaxTokens": 1,
+      "maxTokensLimit": 1,
+      "knowledgeCutoff": "2025-08-31"
+    }
+  ]
+}

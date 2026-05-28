@@ -1,0 +1,35 @@
+{
+  "name": "pay-api-proxy",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server/index.js",
+    "openai:models": "tsx src/tools/list-openai-models.ts",
+    "openai:endpoints": "tsx src/tools/test-openai-endpoints.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "fastify": "^5.6.2",
+    "js-tiktoken": "^1.0.21",
+    "mppx": "^0.6.22",
+    "nanoid": "^5.1.6",
+    "pino": "^10.1.0",
+    "viem": "^2.49.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

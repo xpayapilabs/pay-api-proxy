@@ -1,0 +1,82 @@
+services:
+  app:
+    build: .
+    image: pay-api-proxy/app:local
+    restart: unless-stopped
+    stop_grace_period: ${APP_STOP_GRACE_PERIOD:-75s}
+    env_file:
+      - .env
+    volumes:
+      - ./pay-api-proxy.config.jsonc:/app/pay-api-proxy.config.jsonc:ro
+      - pay-api-proxy-data:/app/data
+    ports:
+      - "${APP_BIND:-127.0.0.1:8787}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    image: pay-api-proxy/app:local
+    build: .
+    restart: unless-stopped
+    stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-30s}
+    command: ["node", "dist/worker/index.js"]
+    env_file:
+      - .env
+    volumes:
+      - ./pay-api-proxy.config.jsonc:/app/pay-api-proxy.config.jsonc:ro
+      - pay-api-proxy-data:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    profiles:
+      - vps
+    environment:
+      DOMAIN_NAME: ${DOMAIN_NAME:-${PUBLIC_HOST:-localhost}}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+
+  cloudflared-quick:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles:
+      - quick-tunnel
+    command: tunnel --url http://app:8080 --no-autoupdate
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  pay-api-proxy-data:
+  caddy-data:
+  caddy-config:

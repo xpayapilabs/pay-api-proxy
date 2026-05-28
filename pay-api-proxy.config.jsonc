@@ -1,0 +1,159 @@
+{
+  // ─────────────────────────────────────────────────────────────────────────
+  // pay-api-proxy config — NORMAL HTTP API PROVIDER
+  // ─────────────────────────────────────────────────────────────────────────
+  // This is the operator-side config for running a paid HTTP proxy in front
+  // of an existing HTTP API. Each incoming request is gated by an mppx 402
+  // challenge; payment is settled on Tempo as a single TIP-20 transfer per
+  // request (no payment channels for this charging mode).
+  //
+  // For AI / OpenAI-compatible deployments use pay-api-proxy-openai.config.jsonc
+  // as the base instead — that file enables /v1/chat/completions etc.
+  //
+  // Required ENV in .env (separate from this file):
+  //   NODE_SIGNING_SECRET        — 32+ hex bytes used to sign local receipts
+  //   PAYMENT_RECIPIENT_ADDRESS  — Tempo wallet that receives customer payments
+  // Optional ENV (overrides values below):
+  //   HOST, PORT, DATABASE_PATH, DOMAIN_NAME, PUBLIC_BASE_URL
+  //   RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ────────── REQUIRED: payment + upstream provider modes ──────────
+  // "tempo-testnet" for Tempo Moderato (chainId 42431).
+  // "tempo-mainnet" for Tempo mainnet (chainId 4217) when you're ready for real funds.
+  "paymentProvider": "tempo-testnet",
+
+  // For traditional HTTP APIs this field is effectively unused — the mppx
+  // Proxy mounts its own per-request charge handler regardless. "per-request"
+  // is the most descriptive value; "ai-token" also works.
+  "chargingMethod": "per-request",
+
+  // "http" exposes only configured traditionalApis. Set to "openai" only if
+  // you also want this node to serve /v1/chat/completions etc.
+  "upstreamProvider": "http",
+
+  // ────────── REQUIRED: at least one paid HTTP API ──────────
+  // Each entry in this array mounts ONE upstream HTTP API at the node's root
+  // ("/", transparent mount). Currently only one enabled API is supported per
+  // node (single-API mount mode); future versions will allow multiple under
+  // /api/<id>/ prefixes.
+  //
+  // Per-entry fields:
+  //   id              REQUIRED  internal identifier, also used in receipts
+  //   upstreamBaseUrl REQUIRED  the upstream API origin (e.g. https://api.fx.example)
+  //                             If the upstream runs on the same VPS host, you
+  //                             may set http://localhost:8000; Docker runtime
+  //                             maps it to host.docker.internal automatically.
+  //   pricing.request REQUIRED  default per-request price as a decimal asset amount
+  //                             (with pathUSD's 6 decimals, "0.0025" = 2500 units)
+  //   methods         optional  HTTP methods allowed at the root level
+  //                             (default: ["GET","POST","PUT","PATCH","DELETE"])
+  //   routes          optional  per-route price + method + bearer/header overrides
+  //   bearer          optional  injected as `Authorization: Bearer …` upstream
+  //   headers         optional  arbitrary headers injected on every upstream call
+  //   upstreamTimeoutMs optional upstream deadline in milliseconds (default 30000)
+  //   forwardedHeaders optional headers from the customer that pass through to upstream
+  //                             (default: accept, accept-language, content-type,
+  //                             idempotency-key, x-correlation-id, x-request-id,
+  //                             if-match, if-none-match)
+  //   assetSymbol     optional  display-only (default: "pathUSD" on testnet)
+  //   assetAddress    optional  TIP-20 token to bill in (default: tempo.acceptedAsset)
+  //   chainId         optional  chain to settle on (default: tempo.chainId)
+  //   enabled         optional  default true
+  "traditionalApis": [
+    {
+      "id": "fx",
+      "upstreamBaseUrl": "https://your-upstream-api.example",
+      "pricing": { "request": "0.0005" },                  // default $0.0005 per call
+      "methods": ["GET", "POST"],
+
+      // Operator-side auth injected on every upstream call. Pick whichever the
+      // upstream expects:
+      "bearer": "your-upstream-bearer-token-here",
+      // "headers": { "x-api-key": "your-upstream-key", "x-tenant": "your-tenant" },
+
+      // Per-route price overrides. Route paths support exact matches,
+      // OpenAPI templates (/v1/users/{id}), prefix wildcards (/v1/live/*),
+      // and "*" as a catch-all. Most specific matching route wins.
+      // Set allowUnmatchedRoutes=false when imported routes should be the
+      // public allowlist. Per-route bearer/headers also override the API-level
+      // defaults.
+      "routes": [
+        {
+          "id": "live",
+          "path": "/v1/live/*",
+          "methods": ["GET"],
+          "pricing": { "request": "0.0025" }               // $0.0025 per call
+          // "bearer": "route-specific-token",
+          // "headers": { "x-api-key": "route-specific-key" }
+        },
+        {
+          "id": "status",
+          "path": "/v1/status",
+          "methods": ["GET"],
+          "pricing": { "request": "0.0001" }               // $0.0001 per call
+        }
+      ]
+
+      // Customer-supplied headers to forward upstream. Defaults are usually
+      // fine; only override if you need to pass through extra headers like
+      // `x-app-version` or `x-customer-region`. Auth / cookie / forwarded-for
+      // are never forwarded.
+      // "forwardedHeaders": ["accept", "content-type", "x-app-version"]
+    }
+  ],
+
+  // ────────── OPTIONAL: networking ──────────
+  // All have sensible defaults. Override in this file or via ENV.
+  "host": "0.0.0.0",
+  "port": 8080,
+  "databasePath": "./data/pay-api-proxy.sqlite",
+
+  // CORS Access-Control-Allow-Origin. "*" allows any origin. Use a comma-
+  // separated list of origins for stricter setups: "https://app.example.com".
+  "corsAllowOrigin": "*",
+
+  // Per-request body size limit applied to ALL routes (including the upstream
+  // proxy). Defaults to 1 MiB. Bump if your upstream takes large uploads.
+  "maxRequestBodyBytes": 1048576,
+
+  // ────────── OPTIONAL: defense-in-depth rate limit ──────────
+  // Per-IP token bucket. Skips /health, /pricing, /.well-known/*. You should
+  // still set a coarser limit at your edge (Caddy/nginx/CloudFront).
+  // Defaults: 120 req/min (or 20 req/min for /v1/images/generations).
+  // "rateLimit": { "max": 120, "imageMax": 20, "timeWindowMs": 60000 },
+
+  // ────────── OPTIONAL: Tempo settlement chain ──────────
+  // Defaults below target Tempo Moderato testnet. Switch to mainnet only when
+  // you're ready for real funds — see the commented block at the bottom.
+  // assetDecimals is the on-chain decimals of acceptedAsset; pathUSD/USDC use 6.
+  "tempo": {
+    "rpcUrl": "https://rpc.moderato.tempo.xyz",
+    "chainId": 42431,
+    "acceptedAsset": "0x20c0000000000000000000000000000000000000",   // pathUSD
+    "assetDecimals": 6
+  }
+
+  // ────────── NOT NEEDED for HTTP API operators ──────────
+  // These fields are AI-only or session-only and can be omitted entirely:
+  //   "openaiBaseUrl"              — only if upstreamProvider = "openai"
+  //   "openaiEndpointWhitelist"    — only if you want /v1/models, etc. exposed
+  //   "models"                     — only if you proxy OpenAI-compatible models
+  //   "mppxSession"                — only if you also serve AI customers with
+  //                                  native mppx session credentials. Traditional
+  //                                  APIs use tempo.charge (per-request), not
+  //                                  tempo.session (channel).
+  //   "sessionBilling"             — only relevant when AI endpoints are enabled
+  //
+  // ────────── Tempo MAINNET alternative ──────────
+  // To go live on Tempo mainnet, replace the "tempo" block above with this
+  // block (or set the matching TEMPO_* env vars).
+  /*
+  "tempo": {
+    "rpcUrl": "https://rpc.tempo.xyz",
+    "chainId": 4217,
+    "acceptedAsset": "0x20C000000000000000000000b9537d11c60E8b50",   // USDC
+    "assetDecimals": 6
+  }
+  */
+}

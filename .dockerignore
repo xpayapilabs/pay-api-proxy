@@ -1,0 +1,17 @@
+.git
+.gitignore
+node_modules
+dist
+data
+coverage
+tests
+.env
+*.db
+*.sqlite
+*.md
+deploy
+scripts
+docker-compose.yml
+Dockerfile
+.dockerignore
+vitest.config.ts

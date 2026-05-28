@@ -1,0 +1,83 @@
+{
+  // Network settings for the Node server inside Docker.
+  "host": "0.0.0.0",
+  "port": 8080,
+  "databasePath": "./data/pay-api-proxy.sqlite",
+
+  // Use "tempo-testnet" for Tempo Moderato, or "tempo-mainnet" for real funds.
+  "paymentProvider": "tempo-testnet",
+  "upstreamProvider": "openai",
+  // Supported values: "ai-token" or "per-request".
+  "chargingMethod": "ai-token",
+  // Session-backed AI token requests reserve the max quote, then settle actual usage.
+  // An mppx adapter can map this to mppx.session({ amount, unitType }) fixed units.
+  "sessionBilling": {
+    "reserveMode": "max-quote",
+    "settlementMode": "actual-usage",
+    "unitAmount": "1",
+    "unitType": "asset-smallest-unit"
+  },
+  // Optional native mppx Tempo sessions. Requires MPPX_SESSION_PRIVATE_KEY in .env.
+  // When enabled, callers can use mppx/client session credentials directly on
+  // /v1/chat/completions without first calling /v1/payment-sessions.
+  // testnet defaults to true when tempo.chainId === 42431 (Tempo Moderato).
+  "mppxSession": {
+    "enabled": true,
+    "waitForConfirmation": true
+  },
+  // Defense-in-depth per-IP rate limit. Image generation uses a separate stricter bucket.
+  // Operators should still set a coarser limit at their edge (Caddy/nginx).
+  // Defaults: 120 requests and 20 image requests per 60_000 ms.
+  // "rateLimit": { "max": 120, "imageMax": 20, "timeWindowMs": 60000 },
+  // Traditional APIs use per-request charging and are published at root paths.
+  // "traditionalApis": [
+  //   {
+  //     "id": "fx",
+  //     "upstreamBaseUrl": "https://demo-fx.example",
+  //     "bearer": "optional-upstream-token",
+  //     "headers": { "x-api-key": "optional-upstream-api-key" },
+  //     "methods": ["GET"],
+  //     "pricing": { "request": "0.0005" },
+  //     "routes": [
+  //       { "id": "live", "path": "/v1/live/*", "methods": ["GET"], "pricing": { "request": "0.0025" } }
+  //     ],
+  //     "assetSymbol": "pathUSD",
+  //     "assetAddress": "0x20c0000000000000000000000000000000000000",
+  //     "chainId": 42431
+  //   }
+  // ],
+
+  "corsAllowOrigin": "*",
+  "maxRequestBodyBytes": 1048576,
+
+  // OpenAI-compatible upstream settings.
+  "openaiBaseUrl": "https://api.openai.com/v1",
+  "openaiEndpointWhitelist":
+  ["models",
+  "chat_completions",
+  "images"],
+
+  // OpenAI-compatible model defaults live in src/core/models.ts and are applied when
+  // MODELS, "models", and openai-models.config.jsonc are omitted. In OpenAI mode,
+  // openai-models.config.jsonc is auto-loaded when it exists and no inline models
+  // are configured.
+
+
+  // Tempo testnet settlement settings.
+  // assetDecimals is the on-chain decimals of acceptedAsset; pathUSD/USDC use 6.
+  "tempo": {
+    "rpcUrl": "https://rpc.moderato.tempo.xyz",
+    "chainId": 42431,
+    "acceptedAsset": "0x20c0000000000000000000000000000000000000",
+    "assetDecimals": 6
+  }
+  // Tempo mainnet settlement settings (comment out the above "tempo" block and uncomment the below block to switch to mainnet).
+  /*
+  "tempo": {
+    "rpcUrl": "https://rpc.tempo.xyz",
+    "chainId": 4217,
+    "acceptedAsset": "0x20c0000000000000000000000000000000000000",
+    "assetDecimals": 6
+  }
+  */
+}

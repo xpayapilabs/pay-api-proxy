@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.secrets/
+*.db
+*.sqlite
+coverage/
+data/
+.claude/*
+tests/unit/test-mppx-image.jsonc
+scripts/analyze-onchain-wallets.jsonc
+.env.backup
