@@ -358,16 +358,6 @@ function importedOpenApiDocument(
     const pathItem = { ...(paths[route.path] as Record<string, unknown>) };
     for (const method of route.methods) {
       const methodKey = method.toLowerCase();
-<<<<<<< HEAD
-      if (!isRecord(pathItem[methodKey])) continue;
-      const existingOperation = { ...(pathItem[methodKey] as Record<string, unknown>) };
-      pathItem[methodKey] = paidOpenApiOperation(
-        existingOperation,
-        routePaymentInfo(api, config, route.requestPrice, route.id),
-        route.id ?? `${method.toUpperCase()} ${route.path}`,
-        route.id
-      );
-=======
       const existingOperation = isRecord(pathItem[methodKey])
         ? { ...(pathItem[methodKey] as Record<string, unknown>) }
         : {};
@@ -383,7 +373,6 @@ function importedOpenApiDocument(
           route.id ?? `${method.toUpperCase()} ${route.path}`,
           route.id
         );
->>>>>>> dev
     }
     paths[route.path] = pathItem;
   }
