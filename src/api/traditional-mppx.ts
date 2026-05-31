@@ -123,7 +123,7 @@ function createTraditionalRoutes(
   config: AppConfig,
   mppx: TraditionalMppx
 ) {
-  const routes: Service.EndpointMap = {};
+  const entries: Array<[string, Service.Endpoint]> = [];
   const addRoute = (
     method: string,
     path: string,
@@ -132,7 +132,7 @@ function createTraditionalRoutes(
   ) => {
     const routeKey = `${method.toUpperCase()} ${toUrlPatternPath(path)}`;
     if (requestPrice === 0n) {
-      routes[routeKey] = true;
+      entries.push([routeKey, true]);
       return;
     }
     const options = traditionalEndpointOptions(route);
@@ -148,7 +148,7 @@ function createTraditionalRoutes(
       scope: routeScope,
       supportedModes: ["pull", "push"]
     });
-    routes[routeKey] = options ? { pay, options } : pay;
+    entries.push([routeKey, options ? { pay, options } : pay]);
   };
 
   const sortedRoutes = [...api.routes].sort((left, right) =>
@@ -160,7 +160,23 @@ function createTraditionalRoutes(
   if (api.allowUnmatchedRoutes !== false) {
     for (const method of api.methods) addRoute(method, "*", api.requestPrice);
   }
-  return routes;
+
+  entries.sort((left, right) => routeKeySpecificity(right[0]) - routeKeySpecificity(left[0]));
+  return Object.fromEntries(entries) as Service.EndpointMap;
+}
+
+function routeKeySpecificity(routeKey: string): number {
+  const tokens = routeKey.trim().split(/\s+/);
+  const pattern = tokens.length >= 2 ? tokens.slice(1).join(" ") : routeKey;
+  if (pattern === "/*" || pattern === "*") return 0;
+  const wildcardCount = pattern.match(/\*/g)?.length ?? 0;
+  const parameterCount = pattern.match(/\{[^}]+\}|:[A-Za-z_][A-Za-z0-9_]*/g)?.length ?? 0;
+  const staticLength = pattern
+    .replace(/\{[^}]+\}/g, "")
+    .replace(/:[A-Za-z_][A-Za-z0-9_]*/g, "")
+    .replace(/\*/g, "")
+    .length;
+  return staticLength * 100 - parameterCount * 10 - wildcardCount * 50 + pattern.length;
 }
 
 export function prepareTraditionalUpstreamRequest(

@@ -33,6 +33,12 @@ XPAYAPI_REGISTER="${XPAYAPI_REGISTER:-auto}"  # auto | no — set "no" to skip a
 PUBLIC_SCHEME="http"
 PUBLIC_URL=""
 
+quote_env_value() {
+  local value="$1"
+  value="${value//\'/\'\\\'\'}"
+  printf "'%s'" "$value"
+}
+
 set_env() {
   local name="$1"
   local value="$2"
@@ -44,7 +50,7 @@ set_env() {
     cat "$tmp_file" > .env
     rm -f "$tmp_file"
   fi
-  printf '%s=%s\n' "$name" "$value" >> .env
+  printf '%s=%s\n' "$name" "$(quote_env_value "$value")" >> .env
 }
 
 public_url_from_domain_name() {

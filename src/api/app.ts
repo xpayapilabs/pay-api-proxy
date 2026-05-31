@@ -12,6 +12,7 @@ import { createSessionBackends } from "../sessions/index.js";
 import { registerPaidEndpoints } from "../endpoints/index.js";
 import { sendOpenAiError } from "./errors.js";
 import { createRequestTracker, type RequestTracker } from "./request-tracker.js";
+import { rawAmountToDecimalString } from "../payments/mppx-session.js";
 import { createTraditionalMppxProxy, toFetchRequest, type TraditionalMppxProxy } from "./traditional-mppx.js";
 
 const SESSION_ID_PATTERN = /^sess_[A-Za-z0-9_-]{1,64}$/;
@@ -108,55 +109,7 @@ export function buildApp(deps: AppDeps) {
     discovery: `${deps.config.publicBaseUrl}/.well-known/mpp`
   }));
 
-  app.get("/pricing", async () => ({
-    upstream_provider: deps.config.upstreamProvider,
-    openai_endpoints: deps.config.openaiEndpointWhitelist,
-    session_billing: {
-      reserve_mode: deps.config.sessionBilling.reserveMode,
-      settlement_mode: deps.config.sessionBilling.settlementMode,
-      unit_amount: deps.config.sessionBilling.unitAmount.toString(),
-      unit_type: deps.config.sessionBilling.unitType
-    },
-    models: deps.config.models.filter((model) => model.enabled).map((model) => ({
-      model: model.modelName,
-      charging_method: deps.config.chargingMethod,
-      input_price_per_million: model.inputPricePerMillion.toString(),
-      cached_input_price_per_million: model.cachedInputPricePerMillion?.toString(),
-      output_price_per_million: model.outputPricePerMillion.toString(),
-      image_text_input_price_per_million: model.imageTextInputPricePerMillion?.toString(),
-      image_input_price_per_million: model.imageInputPricePerMillion?.toString(),
-      image_output_price_per_million: model.imageOutputPricePerMillion?.toString(),
-      image_max_output_tokens: model.imageMaxOutputTokens,
-      request_price: (model.requestPrice ?? model.minimumCharge).toString(),
-      minimum_charge: model.minimumCharge.toString(),
-      default_max_tokens: model.defaultMaxTokens,
-      max_tokens_limit: model.maxTokensLimit,
-      context_window: model.contextWindow,
-      knowledge_cutoff: model.knowledgeCutoff,
-      asset_symbol: model.assetSymbol,
-      asset_address: model.assetAddress,
-      asset_decimals: deps.config.tempo.assetDecimals,
-      chain_id: model.chainId
-    })),
-    apis: deps.config.traditionalApis.filter((api) => api.enabled).map((api) => ({
-      id: api.id,
-      charging_method: "per-request",
-      request_price: api.requestPrice.toString(),
-      methods: api.methods,
-      path_prefix: "/",
-      allow_unmatched_routes: api.allowUnmatchedRoutes !== false,
-      routes: api.routes.map((route) => ({
-        id: route.id,
-        path: route.path,
-        methods: route.methods,
-        request_price: route.requestPrice.toString()
-      })),
-      asset_symbol: api.assetSymbol,
-      asset_address: api.assetAddress,
-      asset_decimals: deps.config.tempo.assetDecimals,
-      chain_id: api.chainId
-    }))
-  }));
+  app.get("/pricing", async () => buildPricingPayload(deps.config));
 
   app.get("/openapi.json", async (request, reply) => {
     if (!traditionalMppxProxy) {
@@ -658,6 +611,68 @@ function createRateLimiter(config: AppConfig["rateLimit"]): RateLimiter {
       existing.count += 1;
       return { ok: true };
     }
+  };
+}
+
+function buildPricingPayload(config: AppConfig) {
+  const payload: Record<string, unknown> = {
+    upstream_provider: config.upstreamProvider,
+    apis: config.traditionalApis.filter((api) => api.enabled).map((api) => ({
+      id: api.id,
+      charging_method: "per-request",
+      request_price: api.requestPrice.toString(),
+      request_price_decimal: rawAmountToDecimalString(api.requestPrice, config.tempo.assetDecimals),
+      methods: api.methods,
+      path_prefix: "/",
+      allow_unmatched_routes: api.allowUnmatchedRoutes !== false,
+      routes: api.routes.map((route) => ({
+        id: route.id,
+        path: route.path,
+        methods: route.methods,
+        request_price: route.requestPrice.toString(),
+        request_price_decimal: rawAmountToDecimalString(route.requestPrice, config.tempo.assetDecimals)
+      })),
+      asset_symbol: api.assetSymbol,
+      asset_address: api.assetAddress,
+      asset_decimals: config.tempo.assetDecimals,
+      chain_id: api.chainId
+    }))
+  };
+
+  if (config.upstreamProvider !== "openai") {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    openai_endpoints: config.openaiEndpointWhitelist,
+    session_billing: {
+      reserve_mode: config.sessionBilling.reserveMode,
+      settlement_mode: config.sessionBilling.settlementMode,
+      unit_amount: config.sessionBilling.unitAmount.toString(),
+      unit_type: config.sessionBilling.unitType
+    },
+    models: config.models.filter((model) => model.enabled).map((model) => ({
+      model: model.modelName,
+      charging_method: config.chargingMethod,
+      input_price_per_million: model.inputPricePerMillion.toString(),
+      cached_input_price_per_million: model.cachedInputPricePerMillion?.toString(),
+      output_price_per_million: model.outputPricePerMillion.toString(),
+      image_text_input_price_per_million: model.imageTextInputPricePerMillion?.toString(),
+      image_input_price_per_million: model.imageInputPricePerMillion?.toString(),
+      image_output_price_per_million: model.imageOutputPricePerMillion?.toString(),
+      image_max_output_tokens: model.imageMaxOutputTokens,
+      request_price: (model.requestPrice ?? model.minimumCharge).toString(),
+      minimum_charge: model.minimumCharge.toString(),
+      default_max_tokens: model.defaultMaxTokens,
+      max_tokens_limit: model.maxTokensLimit,
+      context_window: model.contextWindow,
+      knowledge_cutoff: model.knowledgeCutoff,
+      asset_symbol: model.assetSymbol,
+      asset_address: model.assetAddress,
+      asset_decimals: config.tempo.assetDecimals,
+      chain_id: model.chainId
+    }))
   };
 }
 

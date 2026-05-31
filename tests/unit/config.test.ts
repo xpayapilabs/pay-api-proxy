@@ -686,6 +686,33 @@ describe("config", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("disables catch-all pricing by default when ROUTE_PRICES is configured", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-route-prices-allowlist-default-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        traditionalApis: [{
+          id: "deepl",
+          upstreamBaseUrl: "https://deepl.example",
+          pricing: { request: "0.001" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.ROUTE_PRICES =
+      "POST:/deepl/languages=0.01,POST:/deepl/rephrase=0,POST:/deepl/translate=0.0005";
+    delete process.env.ROUTE_ALLOWLIST;
+
+    const config = loadConfig();
+    expect(config.traditionalApis[0].routes).toHaveLength(3);
+    expect(config.traditionalApis[0].allowUnmatchedRoutes).toBe(false);
+    expect(config.traditionalApis[0].routes[2].requestPrice).toBe(500n);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("rejects invalid ROUTE_PRICES JSON", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-env-routes-invalid-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");

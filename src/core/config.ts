@@ -664,7 +664,7 @@ function parseTraditionalApiConfig(
       return method.toUpperCase();
     }))];
   };
-  const parseRoutes = (): TraditionalApiRouteConfig[] => {
+  const parsedRoutes = ((): TraditionalApiRouteConfig[] => {
     const routesEnv = optionalEnvWithLegacy("ROUTE_PRICES", "TRADITIONAL_API_ROUTES");
     let value = api.routes;
     let routesName = `${collectionName}[${index}].routes`;
@@ -706,7 +706,7 @@ function parseTraditionalApiConfig(
         headers: headersValue(route, `${routeName}.headers`)
       };
     });
-  };
+  })();
   const chainIdValue = (): number => {
     const value = api.chainId ?? fallbackModel?.chainId ?? DEFAULT_APP_SETTINGS.tempo.chainId;
     if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
@@ -767,8 +767,10 @@ function parseTraditionalApiConfig(
     requestPrice: optionalEnv("DEFAULT_REQUEST_PRICE")
       ? parseTraditionalRequestPrice({ pricing: { request: optionalEnv("DEFAULT_REQUEST_PRICE") } }, "DEFAULT_REQUEST_PRICE", assetDecimals)
       : requestPriceValue(api, `${collectionName}[${index}]`),
-    routes: parseRoutes(),
-    allowUnmatchedRoutes: routesOnly === undefined ? boolValue("allowUnmatchedRoutes", true) : !routesOnly,
+    routes: parsedRoutes,
+    allowUnmatchedRoutes: routesOnly === undefined
+      ? boolValue("allowUnmatchedRoutes", parsedRoutes.length === 0)
+      : !routesOnly,
     openApiDocumentPath: optionalEnvWithLegacy("OPENAPI_DOCUMENT_PATH", "TRADITIONAL_OPENAPI_DOCUMENT_PATH") ??
       optionalStringValueFrom(api, `${collectionName}[${index}].openApiDocumentPath`, "openApiDocumentPath"),
     openApiDocumentUrl: normalizedOpenApiDocumentUrl,
