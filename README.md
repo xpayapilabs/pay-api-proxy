@@ -102,11 +102,11 @@ Traditional APIs are configured with `traditionalApis`:
 
 That publishes the API at the root mount, so `/v1/quote` forwards to the matching upstream path without an `/api/{id}` prefix.
 Traditional HTTP APIs use fixed per-request `tempo.charge` billing. They do not use native mppx session channels.
-`bearer` injects `Authorization: Bearer ...` upstream and `headers` injects arbitrary upstream headers, matching the common `mppx/proxy` `Service.custom` options. Route `pricing.request`, `bearer`, and `headers` values override the API default. Route paths support exact matches, OpenAPI templates such as `/v1/users/{id}`, prefix wildcards such as `/v1/live/*`, and `*` as a catch-all; the most specific matching route wins. Set `allowUnmatchedRoutes: false` or `TRADITIONAL_API_ROUTES_ONLY=true` when you want an imported OpenAPI route list to act as the public allowlist.
+`bearer` injects `Authorization: Bearer ...` upstream and `headers` injects arbitrary upstream headers, matching the common `mppx/proxy` `Service.custom` options. Route `pricing.request`, `bearer`, and `headers` values override the API default. Route paths support exact matches, OpenAPI templates such as `/v1/users/{id}`, prefix wildcards such as `/v1/live/*`, and `*` as a catch-all; the most specific matching route wins. Set `allowUnmatchedRoutes: false` or `ROUTE_ALLOWLIST=true` when you want an imported OpenAPI route list to act as the public allowlist. Set a route price to `"0"` (compact env: `POST:/path=0`) for free passthrough with no payment challenge.
 
 If the upstream API runs directly on the same VPS host while this node runs in Docker, you can set `UPSTREAM_BASE_URL=http://localhost:8000`. At runtime the Docker app maps localhost-style upstream URLs to `host.docker.internal` so the container reaches the host service.
 
-To preserve an existing OpenAPI document during installer-based setup, set `TRADITIONAL_OPENAPI_DOCUMENT_URL` to a public or server-reachable JSON URL, or set `TRADITIONAL_OPENAPI_SOURCE_PATH` to a local file path on the server / a folder containing `openapi.json` or `swagger.json`. The installer copies local files into the Docker data volume and configures `/openapi.json` to inject payment metadata into that document.
+To preserve an existing OpenAPI document during installer-based setup, set `OPENAPI_DOCUMENT_URL` to a public or server-reachable JSON URL, or set `OPENAPI_SOURCE_PATH` to a local file path on the server / a folder containing `openapi.json` or `swagger.json`. The installer copies local files into the Docker data volume and configures `/openapi.json` to inject payment metadata into that document.
 
 OpenAI-compatible model defaults live in [src/core/models.ts](src/core/models.ts) and are applied when `MODELS`, inline `models`, and [openai-models.config.jsonc](openai-models.config.jsonc) are omitted. This keeps [pay-api-proxy.config.jsonc](pay-api-proxy.config.jsonc) usable for normal HTTP API providers that do not serve OpenAI models.
 
@@ -174,6 +174,7 @@ Compose starts:
 ### One-command install script
 
 `scripts/install.sh` clones the repo, writes `.env`, and runs Docker Compose.
+Set `GIT_BRANCH=dev` (or `REPO_BRANCH`) to install from a non-default branch; re-runs fetch and pull that branch when set.
 On fresh hosts it installs Docker when missing.
 
 **Oracle Linux** (and other RHEL-family distros such as RHEL, Rocky, AlmaLinux)

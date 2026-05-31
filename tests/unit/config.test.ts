@@ -19,10 +19,13 @@ const SAVED_KEYS = [
   "UPSTREAM_AUTH_HEADER",
   "UPSTREAM_AUTH_HEADER_VALUE",
   "DEFAULT_REQUEST_PRICE",
+  "ROUTE_PRICES",
+  "ROUTE_ALLOWLIST",
   "TRADITIONAL_API_ROUTES",
   "TRADITIONAL_API_ROUTES_ONLY",
-  "TRADITIONAL_OPENAPI_DOCUMENT_URL",
   "OPENAPI_DOCUMENT_URL",
+  "OPENAPI_DOCUMENT_PATH",
+  "TRADITIONAL_OPENAPI_DOCUMENT_URL",
   "TRADITIONAL_OPENAPI_DOCUMENT_PATH",
   "CHARGING_METHOD",
   "SESSION_BILLING_UNIT_AMOUNT",
@@ -528,7 +531,7 @@ describe("config", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("uses TRADITIONAL_API_ROUTES env JSON for generated route pricing", () => {
+  it("uses ROUTE_PRICES env JSON for generated route pricing", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-env-routes-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");
     writeFileSync(
@@ -546,13 +549,13 @@ describe("config", () => {
     );
 
     process.env.PAY_API_PROXY_CONFIG = configPath;
-    process.env.TRADITIONAL_API_ROUTES = JSON.stringify([
+    process.env.ROUTE_PRICES = JSON.stringify([
       { id: "forecast", path: "/v1/forecast/{city}", methods: ["GET"], pricing: { request: "0.0025" } },
       { id: "search", path: "/v1/search", methods: ["POST"], pricing: { request: "0.003" } }
     ]);
-    process.env.TRADITIONAL_API_ROUTES_ONLY = "true";
-    process.env.TRADITIONAL_OPENAPI_DOCUMENT_URL = "http://localhost:8000/openapi.json";
-    process.env.TRADITIONAL_OPENAPI_DOCUMENT_PATH = "/srv/openapi.json";
+    process.env.ROUTE_ALLOWLIST = "true";
+    process.env.OPENAPI_DOCUMENT_URL = "http://localhost:8000/openapi.json";
+    process.env.OPENAPI_DOCUMENT_PATH = "/srv/openapi.json";
 
     const config = loadConfig();
     expect(config.traditionalApis[0].routes).toHaveLength(2);
@@ -570,7 +573,36 @@ describe("config", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("reads OPENAPI_DOCUMENT_URL as an alias for TRADITIONAL_OPENAPI_DOCUMENT_URL", () => {
+  it("reads legacy TRADITIONAL_* env names for route pricing and OpenAPI settings", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-legacy-env-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        traditionalApis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.TRADITIONAL_API_ROUTES = "GET:/v1/quote=0.0005";
+    process.env.TRADITIONAL_API_ROUTES_ONLY = "true";
+    process.env.TRADITIONAL_OPENAPI_DOCUMENT_URL = "http://localhost:8000/openapi.json";
+    process.env.TRADITIONAL_OPENAPI_DOCUMENT_PATH = "/srv/openapi.json";
+
+    const config = loadConfig();
+    expect(config.traditionalApis[0].routes).toHaveLength(1);
+    expect(config.traditionalApis[0].allowUnmatchedRoutes).toBe(false);
+    expect(config.traditionalApis[0].openApiDocumentUrl).toBe("http://localhost:8000/openapi.json");
+    expect(config.traditionalApis[0].openApiDocumentPath).toBe("/srv/openapi.json");
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("reads OPENAPI_DOCUMENT_URL for OpenAPI discovery", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-openapi-url-alias-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");
     writeFileSync(
@@ -594,7 +626,67 @@ describe("config", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("rejects invalid TRADITIONAL_API_ROUTES JSON", () => {
+  it("uses compact ROUTE_PRICES env format", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-env-routes-compact-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        traditionalApis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.ROUTE_PRICES = "GET:/v1/quote=0.0005,POST:/v1/search=0.003";
+    process.env.ROUTE_ALLOWLIST = "true";
+
+    const config = loadConfig();
+    expect(config.traditionalApis[0].routes).toHaveLength(2);
+    expect(config.traditionalApis[0].routes[0]).toMatchObject({
+      path: "/v1/quote",
+      methods: ["GET"]
+    });
+    expect(config.traditionalApis[0].routes[0].requestPrice).toBe(500n);
+    expect(config.traditionalApis[0].routes[1].requestPrice).toBe(3_000n);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("loads compact ROUTE_PRICES with a zero-price free route", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-route-prices-free-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        traditionalApis: [{
+          id: "deepl",
+          upstreamBaseUrl: "https://deepl.example",
+          pricing: { request: "0.001" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.ROUTE_PRICES =
+      "POST:/deepl/languages=0.001,POST:/deepl/rephrase=0,POST:/deepl/translate=0.0005";
+    process.env.ROUTE_ALLOWLIST = "true";
+
+    const config = loadConfig();
+    expect(config.traditionalApis[0].routes).toHaveLength(3);
+    expect(config.traditionalApis[0].routes[1]).toMatchObject({
+      path: "/deepl/rephrase",
+      methods: ["POST"]
+    });
+    expect(config.traditionalApis[0].routes[1].requestPrice).toBe(0n);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rejects invalid ROUTE_PRICES JSON", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-env-routes-invalid-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");
     writeFileSync(
@@ -609,9 +701,9 @@ describe("config", () => {
     );
 
     process.env.PAY_API_PROXY_CONFIG = configPath;
-    process.env.TRADITIONAL_API_ROUTES = "{";
+    process.env.ROUTE_PRICES = "{";
 
-    expect(() => loadConfig()).toThrow(/TRADITIONAL_API_ROUTES must be valid JSON/);
+    expect(() => loadConfig()).toThrow(/ROUTE_PRICES must be valid JSON/);
 
     rmSync(directory, { recursive: true, force: true });
   });
