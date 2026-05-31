@@ -53,6 +53,42 @@ set_env() {
   printf '%s=%s\n' "$name" "$(quote_env_value "$value")" >> .env
 }
 
+read_env_value() {
+  local name="$1"
+  local line value result=""
+
+  [ -f .env ] || return 1
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+
+    if [ -z "$line" ] || [[ "$line" == \#* ]]; then
+      continue
+    fi
+
+    if [[ "$line" == "$name="* ]]; then
+      value="${line#*=}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+
+      if [[ "$value" == \'*\' && ${#value} -ge 2 ]]; then
+        value="${value:1:${#value}-2}"
+        value="${value//\'\\\'\'/\'}"
+      elif [[ "$value" == \"*\" && ${#value} -ge 2 ]]; then
+        value="${value:1:${#value}-2}"
+        value="${value//\\\"/\"}"
+        value="${value//\\\\/\\}"
+      fi
+
+      result="$value"
+    fi
+  done < .env
+
+  [ -n "$result" ] || return 1
+  printf '%s\n' "$result"
+}
+
 public_url_from_domain_name() {
   local domain_name="${1%%,*}"
   domain_name="${domain_name#"${domain_name%%[![:space:]]*}"}"
@@ -225,7 +261,7 @@ render_caddyfile_email_option() {
 
   local caddy_email="${ACME_EMAIL:-}"
   if [ -z "$caddy_email" ] && [ -f .env ]; then
-    caddy_email="$(awk -F= '$1 == "ACME_EMAIL" { print $2 }' .env | tail -1)"
+    caddy_email="$(read_env_value "ACME_EMAIL" || true)"
   fi
 
   local body tmp email_line
@@ -654,15 +690,15 @@ fi
 persist_public_endpoint_env
 
 if [ -f .env ]; then
-  PUBLIC_BASE_URL="$(awk -F= '$1 == "PUBLIC_BASE_URL" { print $2 }' .env)"
+  PUBLIC_BASE_URL="$(read_env_value "PUBLIC_BASE_URL" || true)"
   PUBLIC_URL="${PUBLIC_BASE_URL%/}"
   if [ -z "$PUBLIC_URL" ]; then
-    CONFIG_DOMAIN_NAME="$(awk -F= '$1 == "DOMAIN_NAME" { print $2 }' .env)"
+    CONFIG_DOMAIN_NAME="$(read_env_value "DOMAIN_NAME" || true)"
     if [ -z "$CONFIG_DOMAIN_NAME" ]; then
-      CONFIG_DOMAIN_NAME="$(awk -F= '$1 == "PUBLIC_HOST" { print $2 }' .env)"
+      CONFIG_DOMAIN_NAME="$(read_env_value "PUBLIC_HOST" || true)"
     fi
     if [ -z "$CONFIG_DOMAIN_NAME" ]; then
-      CONFIG_DOMAIN_NAME="$(awk -F= '$1 == "CADDY_SITE_ADDRESS" { print $2 }' .env)"
+      CONFIG_DOMAIN_NAME="$(read_env_value "CADDY_SITE_ADDRESS" || true)"
     fi
     PUBLIC_URL="$(public_url_from_domain_name "$CONFIG_DOMAIN_NAME" || true)"
   fi
@@ -680,8 +716,8 @@ case "$INSTALL_PROFILE" in
     COMPOSE_PROFILE="vps"
     ;;
   tunnel|cloudflare)
-    TUNNEL_MODE="$(awk -F= '$1 == "CLOUDFLARE_TUNNEL_MODE" { print $2 }' .env 2>/dev/null)"
-    TUNNEL_TOKEN="$(awk -F= '$1 == "CLOUDFLARE_TUNNEL_TOKEN" { print $2 }' .env 2>/dev/null)"
+    TUNNEL_MODE="$(read_env_value "CLOUDFLARE_TUNNEL_MODE" || true)"
+    TUNNEL_TOKEN="$(read_env_value "CLOUDFLARE_TUNNEL_TOKEN" || true)"
     if [ "$TUNNEL_MODE" = "named" ] || { [ "$TUNNEL_MODE" != "quick" ] && [ -n "$TUNNEL_TOKEN" ]; }; then
       COMPOSE_PROFILE="tunnel"
     else
@@ -689,7 +725,7 @@ case "$INSTALL_PROFILE" in
     fi
     ;;
   auto)
-    TUNNEL_TOKEN="$(awk -F= '$1 == "CLOUDFLARE_TUNNEL_TOKEN" { print $2 }' .env 2>/dev/null)"
+    TUNNEL_TOKEN="$(read_env_value "CLOUDFLARE_TUNNEL_TOKEN" || true)"
     if [ -n "$TUNNEL_TOKEN" ]; then
       COMPOSE_PROFILE="tunnel"
     else
@@ -744,7 +780,7 @@ register_with_xpayapi() {
 
   if [ -z "$effective" ]; then
     echo
-    echo "Skipping auto-registration: no PUBLIC_URL resolved. Register manually with:"
+    echo "Skipping auto-registration: no public base URL or domain resolved. Register manually with:"
     echo "  curl -X POST ${XPAYAPI_DIRECTORY_URL}/api/register \\"
     echo "    -H 'Content-Type: application/json' \\"
     echo "    -d '{\"publicBaseUrl\":\"<your-public-url>\"}'"
@@ -753,11 +789,11 @@ register_with_xpayapi() {
 
   if ! is_registerable_public_domain_url "$effective"; then
     echo
-    echo "Skipping auto-registration: PUBLIC_BASE_URL must be a real domain-name base URL, not localhost or an IP address."
-    echo "Register later with:"
+    echo "Skipping auto-registration: resolved public URL is '${effective}', but xpayapi requires a real domain-name base URL."
+    echo "Use a URL like https://api.yourdomain.com, with no localhost, IP address, or path. Register later with:"
     echo "  curl -X POST ${XPAYAPI_DIRECTORY_URL}/api/register \\"
     echo "    -H 'Content-Type: application/json' \\"
-    echo "    -d '{\"publicBaseUrl\":\"https://api.example.com\"}'"
+    echo "    -d '{\"publicBaseUrl\":\"https://api.yourdomain.com\"}'"
     return 0
   fi
 
