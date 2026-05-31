@@ -255,6 +255,10 @@ function optionalBoolEnv(name: string): boolean | undefined {
   return parseBool(name, value);
 }
 
+function optionalBoolEnvWithLegacy(primary: string, legacy: string): boolean | undefined {
+  return optionalBoolEnv(primary) ?? optionalBoolEnv(legacy);
+}
+
 function envFromFile(name: string): string | undefined {
   const filePath = optionalEnv(`${name}_FILE`);
   if (!filePath) return undefined;
@@ -661,15 +665,18 @@ function parseTraditionalApiConfig(
     }))];
   };
   const parseRoutes = (): TraditionalApiRouteConfig[] => {
-    const routesEnv = optionalEnv("TRADITIONAL_API_ROUTES");
+    const routesEnv = optionalEnvWithLegacy("ROUTE_PRICES", "TRADITIONAL_API_ROUTES");
     let value = api.routes;
     let routesName = `${collectionName}[${index}].routes`;
     if (routesEnv !== undefined) {
-      routesName = "TRADITIONAL_API_ROUTES";
+      routesName = optionalEnv("ROUTE_PRICES") !== undefined ? "ROUTE_PRICES" : "TRADITIONAL_API_ROUTES";
       try {
-        value = JSON.parse(routesEnv);
+        value = parseTraditionalApiRoutesEnv(routesEnv, routesName);
       } catch (error) {
-        throw new Error(`TRADITIONAL_API_ROUTES must be valid JSON: ${error instanceof Error ? error.message : "parse failed"}`);
+        throw new Error(
+          `${routesName} must be valid JSON or compact METHOD:/path=price entries: ` +
+          `${error instanceof Error ? error.message : "parse failed"}`
+        );
       }
     }
     if (value === undefined) return [];
@@ -731,9 +738,8 @@ function parseTraditionalApiConfig(
 
   const upstreamBaseUrlFromEnv = optionalEnv("UPSTREAM_BASE_URL");
   const upstreamBaseUrl = normalizeUpstreamBaseUrl(upstreamBaseUrlFromEnv ?? stringValue("upstreamBaseUrl"));
-  const routesOnly = optionalBoolEnv("TRADITIONAL_API_ROUTES_ONLY");
-  const openApiDocumentUrl = optionalEnv("TRADITIONAL_OPENAPI_DOCUMENT_URL") ??
-    optionalEnv("OPENAPI_DOCUMENT_URL") ??
+  const routesOnly = optionalBoolEnvWithLegacy("ROUTE_ALLOWLIST", "TRADITIONAL_API_ROUTES_ONLY");
+  const openApiDocumentUrl = optionalEnvWithLegacy("OPENAPI_DOCUMENT_URL", "TRADITIONAL_OPENAPI_DOCUMENT_URL") ??
     optionalStringValueFrom(api, `${collectionName}[${index}].openApiDocumentUrl`, "openApiDocumentUrl");
   const normalizedOpenApiDocumentUrl = openApiDocumentUrl ? normalizeServerReachableUrl(openApiDocumentUrl) : undefined;
   try {
@@ -749,7 +755,7 @@ function parseTraditionalApiConfig(
     try {
       new URL(normalizedOpenApiDocumentUrl);
     } catch {
-      throw new Error("TRADITIONAL_OPENAPI_DOCUMENT_URL/traditionalApis[].openApiDocumentUrl must be a valid URL");
+      throw new Error("OPENAPI_DOCUMENT_URL/traditionalApis[].openApiDocumentUrl must be a valid URL");
     }
   }
 
@@ -763,7 +769,7 @@ function parseTraditionalApiConfig(
       : requestPriceValue(api, `${collectionName}[${index}]`),
     routes: parseRoutes(),
     allowUnmatchedRoutes: routesOnly === undefined ? boolValue("allowUnmatchedRoutes", true) : !routesOnly,
-    openApiDocumentPath: optionalEnv("TRADITIONAL_OPENAPI_DOCUMENT_PATH") ??
+    openApiDocumentPath: optionalEnvWithLegacy("OPENAPI_DOCUMENT_PATH", "TRADITIONAL_OPENAPI_DOCUMENT_PATH") ??
       optionalStringValueFrom(api, `${collectionName}[${index}].openApiDocumentPath`, "openApiDocumentPath"),
     openApiDocumentUrl: normalizedOpenApiDocumentUrl,
     assetSymbol: optionalStringValue("assetSymbol", fallbackModel?.assetSymbol ?? "USDC"),
@@ -774,6 +780,55 @@ function parseTraditionalApiConfig(
     bearer: optionalStringValueFrom(api, `${collectionName}[${index}].bearer`, "bearer") ?? optionalEnv("UPSTREAM_BEARER_TOKEN"),
     headers: headersValue(api, `${collectionName}[${index}].headers`) ?? upstreamHeaderFromEnv()
   };
+}
+
+/**
+ * ROUTE_PRICES env supports:
+ * - JSON array (full objects with path, methods, pricing.request)
+ * - Compact comma-separated rules: GET:/v1/quote=0.0005,POST+PUT:/v1/items=0.001
+ * Legacy alias: TRADITIONAL_API_ROUTES
+ */
+function parseTraditionalApiRoutesEnv(routesEnv: string, envName = "ROUTE_PRICES"): unknown[] {
+  const trimmed = routesEnv.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`${envName} JSON must be an array`);
+    }
+    return parsed;
+  }
+
+  return trimmed.split(",").filter((segment) => segment.length > 0).map((segment, index) => {
+    const eq = segment.lastIndexOf("=");
+    if (eq <= 0) {
+      throw new Error(`${envName} compact segment[${index}] must be METHOD:/path=price`);
+    }
+    const price = segment.slice(eq + 1).trim();
+    const left = segment.slice(0, eq);
+    const colon = left.indexOf(":");
+    if (colon <= 0) {
+      throw new Error(`${envName} compact segment[${index}] must be METHOD:/path=price`);
+    }
+    const methods = left
+      .slice(0, colon)
+      .split("+")
+      .map((method) => method.trim().toUpperCase())
+      .filter((method) => method.length > 0);
+    const path = left.slice(colon + 1).trim();
+    if (!path.startsWith("/") && path !== "*") {
+      throw new Error(`${envName} compact segment[${index}].path must start with "/"`);
+    }
+    if (!methods.length) {
+      throw new Error(`${envName} compact segment[${index}] must include at least one method`);
+    }
+    return {
+      path,
+      methods,
+      pricing: { request: price }
+    };
+  });
 }
 
 function parseTraditionalRequestPrice(
@@ -788,7 +843,7 @@ function parseTraditionalRequestPrice(
       throw new Error(`${errorName}.requestPrice must be a positive integer string`);
     }
     const parsed = BigInt(text);
-    if (parsed <= 0n) throw new Error(`${errorName}.requestPrice must be greater than zero`);
+    if (parsed < 0n) throw new Error(`${errorName}.requestPrice must be zero or greater`);
     return parsed;
   }
 
@@ -808,8 +863,8 @@ function parseTraditionalRequestPrice(
   if (parsed === undefined) {
     throw new Error(`${errorName} must define requestPrice or pricing.request`);
   }
-  if (parsed <= 0n) {
-    throw new Error(`${errorName}.pricing.request must be greater than zero`);
+  if (parsed < 0n) {
+    throw new Error(`${errorName}.pricing.request must be zero or greater`);
   }
   return parsed;
 }

@@ -130,6 +130,12 @@ function createTraditionalRoutes(
     requestPrice: bigint,
     route?: TraditionalApiRouteConfig
   ) => {
+    const routeKey = `${method.toUpperCase()} ${toUrlPatternPath(path)}`;
+    if (requestPrice === 0n) {
+      routes[routeKey] = true;
+      return;
+    }
+    const options = traditionalEndpointOptions(route);
     const routeScope = `${method.toUpperCase()} ${toDisplayPath(path)}`;
     const pay = mppx.tempo.charge({
       amount: rawAmountToDecimalString(requestPrice, config.tempo.assetDecimals),
@@ -142,8 +148,7 @@ function createTraditionalRoutes(
       scope: routeScope,
       supportedModes: ["pull", "push"]
     });
-    const options = traditionalEndpointOptions(route);
-    routes[`${method.toUpperCase()} ${toUrlPatternPath(path)}`] = options ? { pay, options } : pay;
+    routes[routeKey] = options ? { pay, options } : pay;
   };
 
   const sortedRoutes = [...api.routes].sort((left, right) =>
@@ -352,12 +357,18 @@ function importedOpenApiDocument(
       const existingOperation = isRecord(pathItem[methodKey])
         ? { ...(pathItem[methodKey] as Record<string, unknown>) }
         : {};
-      pathItem[methodKey] = paidOpenApiOperation(
-        existingOperation,
-        routePaymentInfo(api, config, route.requestPrice, route.id),
-        route.id ?? `${method.toUpperCase()} ${route.path}`,
-        route.id
-      );
+      pathItem[methodKey] = route.requestPrice === 0n
+        ? freeOpenApiOperation(
+          existingOperation,
+          route.id ?? `${method.toUpperCase()} ${route.path}`,
+          route.id
+        )
+        : paidOpenApiOperation(
+          existingOperation,
+          routePaymentInfo(api, config, route.requestPrice, route.id),
+          route.id ?? `${method.toUpperCase()} ${route.path}`,
+          route.id
+        );
     }
     paths[route.path] = pathItem;
   }
@@ -387,6 +398,18 @@ function paidOpenApiOperation(
     ...(!operation.operationId && fallbackOperationId ? { operationId: fallbackOperationId } : {}),
     responses,
     "x-payment-info": paymentInfo
+  };
+}
+
+function freeOpenApiOperation(
+  operation: Record<string, unknown>,
+  fallbackSummary?: string,
+  fallbackOperationId?: string
+): Record<string, unknown> {
+  return {
+    ...operation,
+    ...(!operation.summary && fallbackSummary ? { summary: fallbackSummary } : {}),
+    ...(!operation.operationId && fallbackOperationId ? { operationId: fallbackOperationId } : {})
   };
 }
 

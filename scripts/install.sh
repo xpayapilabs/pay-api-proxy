@@ -5,6 +5,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/pay-api-proxy}"
 REPO_URL="${REPO_URL:-https://github.com/xpayapilabs/pay-api-proxy.git}"
+GIT_BRANCH="${GIT_BRANCH:-${REPO_BRANCH:-}}"
 DOMAIN_NAME="${DOMAIN_NAME:-${PUBLIC_HOST:-}}"
 INSTALL_PROFILE="${INSTALL_PROFILE:-${COMPOSE_PROFILE:-auto}}"
 APP_BIND="${APP_BIND:-127.0.0.1:8787}"
@@ -16,13 +17,11 @@ TEMPO_CHAIN_ID="${TEMPO_CHAIN_ID:-}"
 TEMPO_RPC_URL="${TEMPO_RPC_URL:-}"
 TEMPO_ACCEPTED_ASSET="${TEMPO_ACCEPTED_ASSET:-}"
 DEFAULT_REQUEST_PRICE="${DEFAULT_REQUEST_PRICE:-}"
-TRADITIONAL_API_ROUTES="${TRADITIONAL_API_ROUTES:-}"
-TRADITIONAL_API_ROUTES_ONLY="${TRADITIONAL_API_ROUTES_ONLY:-}"
-OPENAPI_DOCUMENT_URL="${OPENAPI_DOCUMENT_URL:-}"
-OPENAPI_SOURCE_PATH="${OPENAPI_SOURCE_PATH:-}"
-TRADITIONAL_OPENAPI_DOCUMENT_URL="${TRADITIONAL_OPENAPI_DOCUMENT_URL:-$OPENAPI_DOCUMENT_URL}"
-TRADITIONAL_OPENAPI_SOURCE_PATH="${TRADITIONAL_OPENAPI_SOURCE_PATH:-$OPENAPI_SOURCE_PATH}"
-TRADITIONAL_OPENAPI_DOCUMENT_PATH="${TRADITIONAL_OPENAPI_DOCUMENT_PATH:-}"
+ROUTE_PRICES="${ROUTE_PRICES:-${TRADITIONAL_API_ROUTES:-}}"
+ROUTE_ALLOWLIST="${ROUTE_ALLOWLIST:-${TRADITIONAL_API_ROUTES_ONLY:-}}"
+OPENAPI_DOCUMENT_URL="${OPENAPI_DOCUMENT_URL:-${TRADITIONAL_OPENAPI_DOCUMENT_URL:-}}"
+OPENAPI_SOURCE_PATH="${OPENAPI_SOURCE_PATH:-${TRADITIONAL_OPENAPI_SOURCE_PATH:-}}"
+OPENAPI_DOCUMENT_PATH="${OPENAPI_DOCUMENT_PATH:-${TRADITIONAL_OPENAPI_DOCUMENT_PATH:-}}"
 UPSTREAM_BASE_URL="${UPSTREAM_BASE_URL:-}"
 UPSTREAM_AUTH_TYPE="${UPSTREAM_AUTH_TYPE:-}"
 UPSTREAM_BEARER_TOKEN="${UPSTREAM_BEARER_TOKEN:-}"
@@ -319,9 +318,9 @@ copy_openapi_document_from_source() {
   mkdir -p data
   cp "$source_file" data/imported-openapi.json
   chmod 644 data/imported-openapi.json
-  set_env "TRADITIONAL_OPENAPI_DOCUMENT_PATH" "/app/data/imported-openapi.json"
-  unset_env "TRADITIONAL_OPENAPI_DOCUMENT_URL"
+  set_env "OPENAPI_DOCUMENT_PATH" "/app/data/imported-openapi.json"
   unset_env "OPENAPI_DOCUMENT_URL"
+  unset_env "TRADITIONAL_OPENAPI_DOCUMENT_URL"
   echo "Copied OpenAPI document from $source_file to $APP_DIR/data/imported-openapi.json"
 }
 
@@ -342,9 +341,9 @@ fetch_openapi_document_from_url() {
   fi
 
   chmod 644 data/imported-openapi.json
-  set_env "TRADITIONAL_OPENAPI_DOCUMENT_PATH" "/app/data/imported-openapi.json"
-  unset_env "TRADITIONAL_OPENAPI_DOCUMENT_URL"
+  set_env "OPENAPI_DOCUMENT_PATH" "/app/data/imported-openapi.json"
   unset_env "OPENAPI_DOCUMENT_URL"
+  unset_env "TRADITIONAL_OPENAPI_DOCUMENT_URL"
   echo "Imported OpenAPI document from $url to $APP_DIR/data/imported-openapi.json"
   return 0
 }
@@ -540,10 +539,22 @@ fi
 mkdir -p "$APP_DIR"
 
 if [ ! -d "$APP_DIR/.git" ]; then
-  git clone "$REPO_URL" "$APP_DIR"
+  if [ -n "$GIT_BRANCH" ]; then
+    git clone --branch "$GIT_BRANCH" "$REPO_URL" "$APP_DIR"
+  else
+    git clone "$REPO_URL" "$APP_DIR"
+  fi
 fi
 
 cd "$APP_DIR"
+
+if [ -d .git ]; then
+  git fetch origin --prune
+  if [ -n "$GIT_BRANCH" ]; then
+    git checkout "$GIT_BRANCH"
+    git pull --ff-only origin "$GIT_BRANCH" 2>/dev/null || git pull origin "$GIT_BRANCH"
+  fi
+fi
 
 if [ -z "$DOMAIN_NAME" ]; then
   DOMAIN_NAME="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -594,25 +605,29 @@ fi
 if [ -n "$DEFAULT_REQUEST_PRICE" ]; then
   set_env "DEFAULT_REQUEST_PRICE" "$DEFAULT_REQUEST_PRICE"
 fi
-if [ -n "$TRADITIONAL_API_ROUTES" ]; then
-  set_env "TRADITIONAL_API_ROUTES" "$TRADITIONAL_API_ROUTES"
+if [ -n "$ROUTE_PRICES" ]; then
+  set_env "ROUTE_PRICES" "$ROUTE_PRICES"
+  unset_env "TRADITIONAL_API_ROUTES"
 fi
-if [ -n "$TRADITIONAL_API_ROUTES_ONLY" ]; then
-  set_env "TRADITIONAL_API_ROUTES_ONLY" "$TRADITIONAL_API_ROUTES_ONLY"
+if [ -n "$ROUTE_ALLOWLIST" ]; then
+  set_env "ROUTE_ALLOWLIST" "$ROUTE_ALLOWLIST"
+  unset_env "TRADITIONAL_API_ROUTES_ONLY"
 fi
-if [ -n "$TRADITIONAL_OPENAPI_SOURCE_PATH" ]; then
-  copy_openapi_document_from_source "$TRADITIONAL_OPENAPI_SOURCE_PATH"
-elif [ -n "$TRADITIONAL_OPENAPI_DOCUMENT_URL" ]; then
-  if ! fetch_openapi_document_from_url "$TRADITIONAL_OPENAPI_DOCUMENT_URL"; then
+if [ -n "$OPENAPI_SOURCE_PATH" ]; then
+  copy_openapi_document_from_source "$OPENAPI_SOURCE_PATH"
+elif [ -n "$OPENAPI_DOCUMENT_URL" ]; then
+  if ! fetch_openapi_document_from_url "$OPENAPI_DOCUMENT_URL"; then
     echo "Warning: could not import OpenAPI from URL at install time; proxy will fetch it at runtime." >&2
-    set_env "TRADITIONAL_OPENAPI_DOCUMENT_URL" "$TRADITIONAL_OPENAPI_DOCUMENT_URL"
+    set_env "OPENAPI_DOCUMENT_URL" "$OPENAPI_DOCUMENT_URL"
+    unset_env "TRADITIONAL_OPENAPI_DOCUMENT_URL"
   fi
-elif [ -n "$TRADITIONAL_OPENAPI_DOCUMENT_PATH" ] &&
-  [[ "$TRADITIONAL_OPENAPI_DOCUMENT_PATH" != /app/* ]] &&
-  [ -e "$TRADITIONAL_OPENAPI_DOCUMENT_PATH" ]; then
-  copy_openapi_document_from_source "$TRADITIONAL_OPENAPI_DOCUMENT_PATH"
-elif [ -n "$TRADITIONAL_OPENAPI_DOCUMENT_PATH" ]; then
-  set_env "TRADITIONAL_OPENAPI_DOCUMENT_PATH" "$TRADITIONAL_OPENAPI_DOCUMENT_PATH"
+elif [ -n "$OPENAPI_DOCUMENT_PATH" ] &&
+  [[ "$OPENAPI_DOCUMENT_PATH" != /app/* ]] &&
+  [ -e "$OPENAPI_DOCUMENT_PATH" ]; then
+  copy_openapi_document_from_source "$OPENAPI_DOCUMENT_PATH"
+elif [ -n "$OPENAPI_DOCUMENT_PATH" ]; then
+  set_env "OPENAPI_DOCUMENT_PATH" "$OPENAPI_DOCUMENT_PATH"
+  unset_env "TRADITIONAL_OPENAPI_DOCUMENT_PATH"
 fi
 if [ -n "$UPSTREAM_BASE_URL" ]; then
   set_env "UPSTREAM_BASE_URL" "$UPSTREAM_BASE_URL"

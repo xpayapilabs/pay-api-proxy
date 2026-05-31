@@ -286,6 +286,64 @@ describe("API integration", () => {
     await upstream.close();
   });
 
+  it("proxies zero-price traditional API routes without payment", async () => {
+    const upstream = await startTraditionalUpstream();
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      traditionalApis: [{
+        id: "deepl",
+        upstreamBaseUrl: upstream.baseUrl,
+        enabled: true,
+        methods: ["POST"],
+        requestPrice: 500n,
+        allowUnmatchedRoutes: false,
+        routes: [
+          { id: "languages", path: "/deepl/languages", methods: ["POST"], requestPrice: 1_000n },
+          { id: "rephrase", path: "/deepl/rephrase", methods: ["POST"], requestPrice: 0n },
+          { id: "translate", path: "/deepl/translate", methods: ["POST"], requestPrice: 500n }
+        ],
+        forwardedHeaders: ["accept", "content-type"],
+        upstreamTimeoutMs: 30_000,
+        assetSymbol: "pathUSD",
+        assetAddress: "0x20c0000000000000000000000000000000000000",
+        chainId: 42431
+      }]
+    });
+
+    const free = await harness.app.inject({
+      method: "POST",
+      url: "/deepl/rephrase",
+      payload: { text: "hello" }
+    });
+    expect(free.statusCode).toBe(200);
+    expect(free.json()).toMatchObject({
+      ok: true,
+      method: "POST",
+      url: "/deepl/rephrase"
+    });
+
+    const paid = await harness.app.inject({
+      method: "POST",
+      url: "/deepl/translate",
+      payload: { text: "hello" }
+    });
+    expect(paid.statusCode).toBe(402);
+    expect(paid.headers["www-authenticate"]).toContain("Payment ");
+
+    const openapi = await harness.app.inject({ method: "GET", url: "/openapi.json" });
+    expect(openapi.statusCode).toBe(200);
+    expect(openapi.json().paths["/deepl/rephrase"].post["x-payment-info"]).toBeUndefined();
+    expect(openapi.json().paths["/deepl/translate"].post["x-payment-info"].offers[0].amount).toBe("500");
+
+    const pricing = await harness.app.inject({ method: "GET", url: "/pricing" });
+    expect(pricing.json().apis[0].routes.find((route: { id: string }) => route.id === "rephrase")).toMatchObject({
+      request_price: "0"
+    });
+
+    await harness.close();
+    await upstream.close();
+  });
+
   it("supports OpenAPI path templates as allowlisted traditional API routes", async () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
