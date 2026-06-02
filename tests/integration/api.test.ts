@@ -44,7 +44,7 @@ const sampleBody = {
   max_tokens: 64
 };
 
-async function startTraditionalUpstream(): Promise<{ baseUrl: string; close(): Promise<void> }> {
+async function startTraditionalUpstream(label = "upstream"): Promise<{ baseUrl: string; close(): Promise<void> }> {
   const server: Server = createServer((request, response) => {
     let body = "";
     request.setEncoding("utf8");
@@ -55,6 +55,7 @@ async function startTraditionalUpstream(): Promise<{ baseUrl: string; close(): P
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({
         ok: true,
+        upstream: label,
         method: request.method,
         url: request.url,
         body: body ? JSON.parse(body) : undefined
@@ -179,7 +180,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "fx",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -236,7 +237,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "fx",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -258,8 +259,8 @@ describe("API integration", () => {
     expect(pricing.statusCode).toBe(200);
     expect(pricing.json().apis[0].path_prefix).toBe("/");
     expect(pricing.json().apis[0].routes).toEqual([
-      { id: "live", path: "/v1/live/*", methods: ["GET"], request_price: "2500" },
-      { id: "status", path: "/v1/status", methods: ["GET"], request_price: "100" }
+      { id: "live", path: "/v1/live/*", methods: ["GET"], request_price: "2500", request_price_decimal: "0.0025" },
+      { id: "status", path: "/v1/status", methods: ["GET"], request_price: "100", request_price_decimal: "0.0001" }
     ]);
 
     const unpaidLive = await harness.app.inject({
@@ -290,7 +291,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "deepl",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -348,7 +349,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "users",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -421,7 +422,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "weather",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -480,7 +481,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "quotes",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -526,7 +527,7 @@ describe("API integration", () => {
     });
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "quotes",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -583,7 +584,7 @@ describe("API integration", () => {
     });
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "quotes",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -610,18 +611,23 @@ describe("API integration", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("rejects multiple enabled traditional APIs in single-API mount mode", async () => {
-    const upstream = await startTraditionalUpstream();
-    expect(() => buildHarness({
+  it("supports multiple traditional APIs under /api/{id} prefixes", async () => {
+    const fxUpstream = await startTraditionalUpstream("fx");
+    const weatherUpstream = await startTraditionalUpstream("weather");
+    const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [
+      apis: [
         {
           id: "fx",
-          upstreamBaseUrl: upstream.baseUrl,
+          upstreamBaseUrl: fxUpstream.baseUrl,
           enabled: true,
           methods: ["GET"],
           requestPrice: 500n,
-          routes: [],
+          routes: [
+            { id: "free", path: "/v1/free", methods: ["GET"], requestPrice: 0n },
+            { id: "quote", path: "/v1/quote", methods: ["GET"], requestPrice: 500n }
+          ],
+          rateLimit: { max: 3, timeWindowMs: 60_000 },
           assetSymbol: "pathUSD",
           assetAddress: "0x20c0000000000000000000000000000000000000",
           chainId: 42431,
@@ -630,11 +636,15 @@ describe("API integration", () => {
         },
         {
           id: "weather",
-          upstreamBaseUrl: upstream.baseUrl,
+          upstreamBaseUrl: weatherUpstream.baseUrl,
           enabled: true,
           methods: ["GET"],
           requestPrice: 500n,
-          routes: [],
+          routes: [
+            { id: "free", path: "/v1/free", methods: ["GET"], requestPrice: 0n },
+            { id: "forecast", path: "/v1/forecast", methods: ["GET"], requestPrice: 700n }
+          ],
+          rateLimit: { max: 5 },
           assetSymbol: "pathUSD",
           assetAddress: "0x20c0000000000000000000000000000000000000",
           chainId: 42431,
@@ -642,15 +652,101 @@ describe("API integration", () => {
           upstreamTimeoutMs: 30_000
         }
       ]
-    })).toThrow(/single-API mount mode/);
-    await upstream.close();
+    });
+
+    const fxFree = await harness.app.inject({ method: "GET", url: "/api/fx/v1/free" });
+    expect(fxFree.statusCode).toBe(200);
+    expect(fxFree.json()).toMatchObject({ upstream: "fx", url: "/v1/free" });
+
+    const weatherFree = await harness.app.inject({ method: "GET", url: "/api/weather/v1/free" });
+    expect(weatherFree.statusCode).toBe(200);
+    expect(weatherFree.json()).toMatchObject({ upstream: "weather", url: "/v1/free" });
+
+    const rootPath = await harness.app.inject({ method: "GET", url: "/v1/free" });
+    expect(rootPath.statusCode).toBe(404);
+
+    const paidFx = await harness.app.inject({ method: "GET", url: "/api/fx/v1/quote" });
+    expect(paidFx.statusCode).toBe(402);
+    expect(paidFx.headers["www-authenticate"]).toContain("Payment ");
+
+    const pricing = await harness.app.inject({ method: "GET", url: "/pricing" });
+    expect(pricing.statusCode).toBe(200);
+    expect(pricing.json().apis).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "fx",
+        path_prefix: "/api/fx",
+        rate_limit: { max: 3, timeWindowMs: 60_000 }
+      }),
+      expect.objectContaining({
+        id: "weather",
+        path_prefix: "/api/weather",
+        rate_limit: { max: 5, timeWindowMs: 60_000 }
+      })
+    ]));
+
+    const openapi = await harness.app.inject({ method: "GET", url: "/openapi.json" });
+    expect(openapi.statusCode).toBe(200);
+    expect(openapi.json().paths["/api/fx/v1/quote"].get["x-xpayapi-api-id"]).toBe("fx");
+    expect(openapi.json().paths["/api/fx/v1/quote"].get["x-payment-info"].offers[0].amount).toBe("500");
+    expect(openapi.json().paths["/api/weather/v1/forecast"].get["x-xpayapi-api-id"]).toBe("weather");
+    expect(openapi.json().paths["/api/weather/v1/forecast"].get["x-payment-info"].offers[0].amount).toBe("700");
+
+    await harness.close();
+    await fxUpstream.close();
+    await weatherUpstream.close();
+  });
+
+  it("applies per-upstream rate limits independently", async () => {
+    const fxUpstream = await startTraditionalUpstream("fx");
+    const weatherUpstream = await startTraditionalUpstream("weather");
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      apis: [
+        {
+          id: "fx",
+          upstreamBaseUrl: fxUpstream.baseUrl,
+          enabled: true,
+          methods: ["GET"],
+          requestPrice: 500n,
+          routes: [{ id: "free", path: "/v1/free", methods: ["GET"], requestPrice: 0n }],
+          rateLimit: { max: 1, timeWindowMs: 60_000 },
+          assetSymbol: "pathUSD",
+          assetAddress: "0x20c0000000000000000000000000000000000000",
+          chainId: 42431,
+          forwardedHeaders: ["accept"],
+          upstreamTimeoutMs: 30_000
+        },
+        {
+          id: "weather",
+          upstreamBaseUrl: weatherUpstream.baseUrl,
+          enabled: true,
+          methods: ["GET"],
+          requestPrice: 500n,
+          routes: [{ id: "free", path: "/v1/free", methods: ["GET"], requestPrice: 0n }],
+          rateLimit: { max: 2, timeWindowMs: 60_000 },
+          assetSymbol: "pathUSD",
+          assetAddress: "0x20c0000000000000000000000000000000000000",
+          chainId: 42431,
+          forwardedHeaders: ["accept"],
+          upstreamTimeoutMs: 30_000
+        }
+      ]
+    });
+
+    expect((await harness.app.inject({ method: "GET", url: "/api/fx/v1/free" })).statusCode).toBe(200);
+    expect((await harness.app.inject({ method: "GET", url: "/api/fx/v1/free" })).statusCode).toBe(429);
+    expect((await harness.app.inject({ method: "GET", url: "/api/weather/v1/free" })).statusCode).toBe(200);
+
+    await harness.close();
+    await fxUpstream.close();
+    await weatherUpstream.close();
   });
 
   it("exposes mppx charge discovery for traditional APIs", async () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "fx",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,
@@ -703,7 +799,7 @@ describe("API integration", () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({
       upstreamProvider: "http",
-      traditionalApis: [{
+      apis: [{
         id: "fx",
         upstreamBaseUrl: upstream.baseUrl,
         enabled: true,

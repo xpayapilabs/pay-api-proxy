@@ -29,8 +29,8 @@
   // Operators should still set a coarser limit at their edge (Caddy/nginx).
   // Defaults: 120 requests and 20 image requests per 60_000 ms.
   // "rateLimit": { "max": 120, "imageMax": 20, "timeWindowMs": 60000 },
-  // Traditional APIs use per-request charging and are published at root paths.
-  // "traditionalApis": [
+  // HTTP API entries use per-request charging and are published at root paths.
+  // "apis": [
   //   {
   //     "id": "fx",
   //     "upstreamBaseUrl": "https://demo-fx.example",

@@ -183,6 +183,39 @@ use Docker's CentOS-compatible `dnf`/`yum` packages: `docker-ce`,
 `podman-docker` shim when present, starts the `docker` service, and installs
 `curl`/`git` if they are missing.
 
+### Manual git clone and configure
+
+For full control, configure the proxy directly from files:
+
+```bash
+git clone https://github.com/xpayapilabs/pay-api-proxy.git
+cd pay-api-proxy
+cp .env.example .env
+```
+
+Edit `pay-api-proxy.config.jsonc` for API shape, upstream URLs, route prices,
+OpenAPI documents, and per-upstream rate limits. Edit `.env` for the payment
+wallet, public domain/base URL, Tempo network values, directory publishing, and
+secrets. For manual setup, prefer JSONC route pricing over `ROUTE_PRICES`;
+`ROUTE_PRICES` is a single-upstream shortcut for generated install commands.
+
+One enabled `traditionalApis[]` entry is published at the root path, so
+`/v1/quote` forwards to the upstream `/v1/quote`. Multiple enabled entries are
+published under `/api/{id}`, such as `/api/fx/v1/quote` and
+`/api/weather/v1/forecast`. In multiple-upstream mode, configure
+`upstreamBaseUrl`, default price, routes, and OpenAPI source per API in JSONC.
+
+Start locally behind an existing reverse proxy:
+
+```bash
+docker compose up -d --build
+```
+
+Or start the public Caddy profile after pointing DNS at the server:
+
+```bash
+docker compose --profile vps up -d --build
+```
 
 ### Graceful restart and shutdown
 

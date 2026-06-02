@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { nanoid } from "nanoid";
 import type { PriceQuote } from "../charging/types.js";
-import type { AppConfig, OpenAiCompatibleEndpoint } from "../core/config.js";
+import type { AppConfig, OpenAiCompatibleEndpoint, TraditionalApiConfig } from "../core/config.js";
 import { parseAmount } from "../core/money.js";
 import type { PaymentReservationRecord, Repository } from "../db/repository.js";
 import type { PaymentProvider } from "../payments/types.js";
@@ -13,7 +13,14 @@ import { registerPaidEndpoints } from "../endpoints/index.js";
 import { sendOpenAiError } from "./errors.js";
 import { createRequestTracker, type RequestTracker } from "./request-tracker.js";
 import { rawAmountToDecimalString } from "../payments/mppx-session.js";
-import { createTraditionalMppxProxy, toFetchRequest, type TraditionalMppxProxy } from "./traditional-mppx.js";
+import {
+  createTraditionalMppxProxy,
+  enabledTraditionalApis,
+  toFetchRequest,
+  traditionalApiForPublicPath,
+  traditionalApiPublicPathPrefix,
+  type TraditionalMppxProxy
+} from "./traditional-mppx.js";
 
 const SESSION_ID_PATTERN = /^sess_[A-Za-z0-9_-]{1,64}$/;
 const CUSTOMER_ID_PATTERN = /^cust_[A-Za-z0-9_-]{1,64}$/;
@@ -50,13 +57,12 @@ export function buildApp(deps: AppDeps) {
     });
   }
 
-  const rateLimiter = createRateLimiter(deps.config.rateLimit);
+  const rateLimiter = createRateLimiter();
   app.addHook("onRequest", async (request, reply) => {
     if (isRateLimitExempt(request.url)) return;
     const ip = clientIpOf(request);
-    const bucket = rateLimitBucket(request.url);
-    const limit = bucket === "images" ? deps.config.rateLimit.imageMax : deps.config.rateLimit.max;
-    const verdict = rateLimiter.check(`${bucket}:${ip}`, limit);
+    const rateLimit = rateLimitForRequest(deps.config, request.url);
+    const verdict = rateLimiter.check(rateLimit.key(ip), rateLimit.max, rateLimit.timeWindowMs);
     if (!verdict.ok) {
       reply.header("retry-after", Math.ceil(verdict.retryAfterMs / 1000).toString());
       sendOpenAiError(reply, 429, "rate_limited", "Too many requests; slow down or contact the operator.");
@@ -113,7 +119,7 @@ export function buildApp(deps: AppDeps) {
 
   app.get("/openapi.json", async (request, reply) => {
     if (!traditionalMppxProxy) {
-      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed traditional APIs are enabled");
+      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed HTTP APIs are enabled");
       return;
     }
     await sendFetchResponse(reply, await traditionalMppxProxy.openApiResponse(deps.config.publicBaseUrl));
@@ -121,7 +127,7 @@ export function buildApp(deps: AppDeps) {
 
   app.get("/llms.txt", async (request, reply) => {
     if (!traditionalMppxProxy) {
-      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed traditional APIs are enabled");
+      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed HTTP APIs are enabled");
       return;
     }
     await sendFetchResponse(reply, await traditionalMppxProxy.llmsResponse(deps.config.publicBaseUrl));
@@ -129,7 +135,7 @@ export function buildApp(deps: AppDeps) {
 
   app.get("/api/openapi.json", async (request, reply) => {
     if (!traditionalMppxProxy) {
-      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed traditional APIs are enabled");
+      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed HTTP APIs are enabled");
       return;
     }
     await sendFetchResponse(reply, await traditionalMppxProxy.openApiResponse(deps.config.publicBaseUrl));
@@ -137,7 +143,7 @@ export function buildApp(deps: AppDeps) {
 
   app.get("/api/llms.txt", async (request, reply) => {
     if (!traditionalMppxProxy) {
-      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed traditional APIs are enabled");
+      sendOpenAiError(reply, 404, "discovery_not_available", "No mppx-backed HTTP APIs are enabled");
       return;
     }
     await sendFetchResponse(reply, await traditionalMppxProxy.llmsResponse(deps.config.publicBaseUrl));
@@ -587,7 +593,7 @@ function escapeAuthParam(value: string): string {
 }
 
 interface RateLimiter {
-  check(key: string, max: number): { ok: true } | { ok: false; retryAfterMs: number };
+  check(key: string, max: number, timeWindowMs: number): { ok: true } | { ok: false; retryAfterMs: number };
 }
 
 /**
@@ -595,14 +601,14 @@ interface RateLimiter {
  * against unauthenticated 402 spam without adding a dependency. An operator's
  * reverse proxy should still set its own coarser limit at the edge.
  */
-function createRateLimiter(config: AppConfig["rateLimit"]): RateLimiter {
+function createRateLimiter(): RateLimiter {
   const counts = new Map<string, { count: number; resetAt: number }>();
   return {
-    check(key, max) {
+    check(key, max, timeWindowMs) {
       const now = Date.now();
       const existing = counts.get(key);
       if (!existing || existing.resetAt <= now) {
-        counts.set(key, { count: 1, resetAt: now + config.timeWindowMs });
+        counts.set(key, { count: 1, resetAt: now + timeWindowMs });
         return { ok: true };
       }
       if (existing.count >= max) {
@@ -614,17 +620,51 @@ function createRateLimiter(config: AppConfig["rateLimit"]): RateLimiter {
   };
 }
 
+function rateLimitForRequest(
+  config: AppConfig,
+  url: string
+): { max: number; timeWindowMs: number; key(ip: string): string } {
+  const path = url.split("?")[0] || "/";
+  const traditionalApi = traditionalApiForPublicPath(config, path);
+  if (traditionalApi) {
+    const effective = effectiveTraditionalApiRateLimit(config, traditionalApi);
+    return {
+      ...effective,
+      key: (ip) => `traditional:${traditionalApi.id}:${ip}`
+    };
+  }
+
+  const bucket = rateLimitBucket(url);
+  return {
+    max: bucket === "images" ? config.rateLimit.imageMax : config.rateLimit.max,
+    timeWindowMs: config.rateLimit.timeWindowMs,
+    key: (ip) => `${bucket}:${ip}`
+  };
+}
+
+function effectiveTraditionalApiRateLimit(
+  config: AppConfig,
+  api: TraditionalApiConfig
+): { max: number; timeWindowMs: number } {
+  return {
+    max: api.rateLimit?.max ?? config.rateLimit.max,
+    timeWindowMs: api.rateLimit?.timeWindowMs ?? config.rateLimit.timeWindowMs
+  };
+}
+
 function buildPricingPayload(config: AppConfig) {
+  const httpApis = enabledTraditionalApis(config);
   const payload: Record<string, unknown> = {
     upstream_provider: config.upstreamProvider,
-    apis: config.traditionalApis.filter((api) => api.enabled).map((api) => ({
+    apis: httpApis.map((api) => ({
       id: api.id,
       charging_method: "per-request",
       request_price: api.requestPrice.toString(),
       request_price_decimal: rawAmountToDecimalString(api.requestPrice, config.tempo.assetDecimals),
       methods: api.methods,
-      path_prefix: "/",
+      path_prefix: traditionalApiPublicPathPrefix(config, api),
       allow_unmatched_routes: api.allowUnmatchedRoutes !== false,
+      rate_limit: effectiveTraditionalApiRateLimit(config, api),
       routes: api.routes.map((route) => ({
         id: route.id,
         path: route.path,

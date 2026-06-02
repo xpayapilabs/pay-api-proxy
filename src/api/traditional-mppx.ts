@@ -20,13 +20,36 @@ interface TraditionalMppx {
 
 const OPENAPI_HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
 
+export function enabledTraditionalApis(config: AppConfig): TraditionalApiConfig[] {
+  return config.apis.filter((api) => api.enabled);
+}
+
+export function httpApisUsePrefixedMount(config: AppConfig): boolean {
+  return enabledTraditionalApis(config).length > 1;
+}
+
+export function traditionalApiPublicPathPrefix(config: AppConfig, api: TraditionalApiConfig): string {
+  return httpApisUsePrefixedMount(config) ? `/api/${api.id}` : "/";
+}
+
+export function traditionalApiForPublicPath(
+  config: AppConfig,
+  path: string
+): TraditionalApiConfig | undefined {
+  const apis = enabledTraditionalApis(config);
+  if (apis.length === 0 || isAlwaysPlatformPath(path)) return undefined;
+  if (config.upstreamProvider === "openai" && isOpenAiPlatformPath(path)) return undefined;
+  if (apis.length === 1) return apis[0];
+
+  const match = /^\/api\/([^/?#]+)(?:\/|$)/.exec(path);
+  if (!match) return undefined;
+  return apis.find((api) => api.id === match[1]);
+}
+
 export function createTraditionalMppxProxy(config: AppConfig): TraditionalMppxProxy | undefined {
-  const apis = config.traditionalApis.filter((api) => api.enabled);
+  const apis = enabledTraditionalApis(config);
   if (apis.length === 0) return undefined;
-  if (apis.length > 1) {
-    throw new Error("single-API mount mode supports exactly one enabled traditionalApi");
-  }
-  const api = apis[0]!;
+  const prefixedMount = apis.length > 1;
 
   const storeHandle = createMppxStore(config);
   const mppx = Mppx.create({
@@ -48,15 +71,30 @@ export function createTraditionalMppxProxy(config: AppConfig): TraditionalMppxPr
   const proxy = Proxy.create({
     basePath: "/api",
     description: "Configured paid HTTP APIs, protected by mppx Payment authentication.",
-    services: [createTraditionalService(api, config, mppx as unknown as TraditionalMppx)],
+    services: apis.map((api) => createTraditionalService(api, config, mppx as unknown as TraditionalMppx)),
     title: "pay-api-proxy HTTP APIs",
     version: "1.0.0"
   });
 
   return {
-    fetch: (request) => fetchWithUpstreamTimeout(proxy, toInternalProxyRequest(request, api.id), api.upstreamTimeoutMs),
-    openApiResponse: (publicBaseUrl) => publicOpenApiResponse(proxy, api, config, publicBaseUrl),
-    llmsResponse: (publicBaseUrl) => publicLlmsResponse(proxy, publicBaseUrl),
+    fetch: (request) => {
+      const url = new URL(request.url);
+      const api = traditionalApiForPublicPath(config, url.pathname);
+      if (!api) {
+        return Promise.resolve(Response.json({
+          error: {
+            code: "traditional_api_not_found",
+            message: prefixedMount
+              ? "Use /api/{id}/... for configured paid HTTP APIs"
+              : "No matching paid HTTP API route was found"
+          }
+        }, { status: 404 }));
+      }
+      const internalRequest = prefixedMount ? request : toInternalProxyRequest(request, api.id);
+      return fetchWithUpstreamTimeout(proxy, internalRequest, api.upstreamTimeoutMs);
+    },
+    openApiResponse: (publicBaseUrl) => publicOpenApiResponse(proxy, apis, config, publicBaseUrl),
+    llmsResponse: (publicBaseUrl) => publicLlmsResponse(proxy, apis, publicBaseUrl),
     close: () => storeHandle.close()
   };
 }
@@ -265,15 +303,66 @@ function toInternalProxyRequest(request: Request, apiId: string): Request {
 
 async function publicOpenApiResponse(
   proxy: Proxy.Proxy,
-  api: TraditionalApiConfig,
+  apis: TraditionalApiConfig[],
   config: AppConfig,
   publicBaseUrl: string
 ): Promise<Response> {
+  if (apis.length === 1) {
+    const result = await publicOpenApiDocumentForApi(proxy, apis[0]!, config, publicBaseUrl, false);
+    if (result instanceof Response) return result;
+    return Response.json(result.document, {
+      headers: { "cache-control": result.cacheControl ?? "public, max-age=300" }
+    });
+  }
+
+  const paths: Record<string, unknown> = {};
+  let cacheControl = "public, max-age=300";
+  for (const api of apis) {
+    const result = await publicOpenApiDocumentForApi(proxy, api, config, publicBaseUrl, true);
+    if (result instanceof Response) return result;
+    cacheControl = result.cacheControl ?? cacheControl;
+    Object.assign(paths, isRecord(result.document.paths) ? result.document.paths : {});
+  }
+
+  return Response.json({
+    openapi: "3.0.3",
+    info: {
+      title: "pay-api-proxy HTTP APIs",
+      description: "Configured paid HTTP APIs exposed by this node."
+    },
+    servers: [{ url: publicBaseUrl }],
+    paths,
+    "x-service-info": {
+      docs: {
+        openapi: `${publicBaseUrl}/openapi.json`,
+        llms: `${publicBaseUrl}/llms.txt`
+      }
+    }
+  }, {
+    headers: { "cache-control": cacheControl }
+  });
+}
+
+async function publicOpenApiDocumentForApi(
+  proxy: Proxy.Proxy,
+  api: TraditionalApiConfig,
+  config: AppConfig,
+  publicBaseUrl: string,
+  prefixed: boolean
+): Promise<{ document: Record<string, unknown>; cacheControl?: string } | Response> {
   if (api.openApiDocumentUrl) {
-    return importedOpenApiResponseFromUrl(api, config, publicBaseUrl);
+    return importedOpenApiDocumentFromUrl(api, config, publicBaseUrl, prefixed);
   }
   if (api.openApiDocumentPath) {
-    return importedOpenApiResponse(api, config, publicBaseUrl);
+    return {
+      document: importedOpenApiDocument(
+        api,
+        config,
+        publicBaseUrl,
+        readImportedOpenApiDocument(api.openApiDocumentPath!),
+        prefixed
+      )
+    };
   }
 
   const response = await proxy.fetch(new Request(new URL("/api/openapi.json", publicBaseUrl)));
@@ -286,15 +375,21 @@ async function publicOpenApiResponse(
   const prefix = `/api/${api.id}`;
   const paths: Record<string, unknown> = {};
   for (const [path, value] of Object.entries(document.paths ?? {})) {
+    if (!pathBelongsToInternalService(path, prefix)) continue;
     const publicPath = stripInternalServicePrefix(path, prefix);
-    paths[toConfiguredOpenApiPath(publicPath, api)] = value;
+    const configuredPath = toConfiguredOpenApiPath(publicPath, api);
+    paths[prefixed ? prefixedOpenApiPath(api, configuredPath) : configuredPath] =
+      annotatePaidOpenApiOperationsWithApiId(value, api.id);
   }
 
-  return Response.json({ ...document, paths }, {
-    headers: {
-      "cache-control": response.headers.get("cache-control") ?? "public, max-age=300"
-    }
-  });
+  return {
+    document: {
+      ...document,
+      servers: [{ url: publicBaseUrl }],
+      paths
+    },
+    cacheControl: response.headers.get("cache-control") ?? undefined
+  };
 }
 
 function toConfiguredOpenApiPath(path: string, api: TraditionalApiConfig): string {
@@ -304,22 +399,44 @@ function toConfiguredOpenApiPath(path: string, api: TraditionalApiConfig): strin
   return path;
 }
 
-function importedOpenApiResponse(
-  api: TraditionalApiConfig,
-  config: AppConfig,
-  publicBaseUrl: string
-): Response {
-  const document = readImportedOpenApiDocument(api.openApiDocumentPath!);
-  return Response.json(importedOpenApiDocument(api, config, publicBaseUrl, document), {
-    headers: { "cache-control": "public, max-age=300" }
-  });
+function pathBelongsToInternalService(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-async function importedOpenApiResponseFromUrl(
+function prefixedOpenApiPath(api: TraditionalApiConfig, path: string): string {
+  if (path === "*" || path === "/*") return `/api/${api.id}/*`;
+  if (path === "/") return `/api/${api.id}`;
+  return `/api/${api.id}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function prefixOpenApiPaths(api: TraditionalApiConfig, paths: Record<string, unknown>): Record<string, unknown> {
+  const prefixed: Record<string, unknown> = {};
+  for (const [path, value] of Object.entries(paths)) {
+    prefixed[prefixedOpenApiPath(api, path)] = value;
+  }
+  return prefixed;
+}
+
+function annotatePaidOpenApiOperationsWithApiId(pathItemValue: unknown, apiId: string): unknown {
+  if (!isRecord(pathItemValue)) return pathItemValue;
+  const pathItem = { ...pathItemValue };
+  for (const [methodKey, operation] of Object.entries(pathItem)) {
+    if (!OPENAPI_HTTP_METHODS.has(methodKey.toLowerCase()) || !isRecord(operation)) continue;
+    if (!isRecord(operation["x-payment-info"])) continue;
+    pathItem[methodKey] = {
+      ...operation,
+      "x-xpayapi-api-id": apiId
+    };
+  }
+  return pathItem;
+}
+
+async function importedOpenApiDocumentFromUrl(
   api: TraditionalApiConfig,
   config: AppConfig,
-  publicBaseUrl: string
-): Promise<Response> {
+  publicBaseUrl: string,
+  prefixed: boolean
+): Promise<{ document: Record<string, unknown>; cacheControl?: string } | Response> {
   const response = await fetch(api.openApiDocumentUrl!, {
     headers: { accept: "application/json" }
   });
@@ -340,16 +457,18 @@ async function importedOpenApiResponseFromUrl(
       }
     }, { status: 502 });
   }
-  return Response.json(importedOpenApiDocument(api, config, publicBaseUrl, document), {
-    headers: { "cache-control": response.headers.get("cache-control") ?? "public, max-age=300" }
-  });
+  return {
+    document: importedOpenApiDocument(api, config, publicBaseUrl, document, prefixed),
+    cacheControl: response.headers.get("cache-control") ?? undefined
+  };
 }
 
 function importedOpenApiDocument(
   api: TraditionalApiConfig,
   config: AppConfig,
   publicBaseUrl: string,
-  document: Record<string, unknown>
+  document: Record<string, unknown>,
+  prefixed: boolean
 ): Record<string, unknown> {
   const originalPaths = isRecord(document.paths) ? document.paths : {};
   const paths: Record<string, unknown> = { ...originalPaths };
@@ -360,7 +479,11 @@ function importedOpenApiDocument(
       const pathItem = { ...pathItemValue };
       for (const [methodKey, operation] of Object.entries(pathItem)) {
         if (!OPENAPI_HTTP_METHODS.has(methodKey.toLowerCase()) || !isRecord(operation)) continue;
-        pathItem[methodKey] = paidOpenApiOperation(operation, routePaymentInfo(api, config, api.requestPrice));
+        pathItem[methodKey] = paidOpenApiOperation(
+          operation,
+          routePaymentInfo(api, config, api.requestPrice),
+          api.id
+        );
       }
       paths[path] = pathItem;
     }
@@ -386,6 +509,7 @@ function importedOpenApiDocument(
         : paidOpenApiOperation(
           existingOperation,
           routePaymentInfo(api, config, route.requestPrice, route.id),
+          api.id,
           route.id ?? `${method.toUpperCase()} ${route.path}`,
           route.id
         );
@@ -396,13 +520,14 @@ function importedOpenApiDocument(
   return {
     ...document,
     servers: [{ url: publicBaseUrl }],
-    paths
+    paths: prefixed ? prefixOpenApiPaths(api, paths) : paths
   };
 }
 
 function paidOpenApiOperation(
   operation: Record<string, unknown>,
   paymentInfo: Record<string, unknown>,
+  apiId: string,
   fallbackSummary?: string,
   fallbackOperationId?: string
 ): Record<string, unknown> {
@@ -417,6 +542,7 @@ function paidOpenApiOperation(
     ...(!operation.summary && fallbackSummary ? { summary: fallbackSummary } : {}),
     ...(!operation.operationId && fallbackOperationId ? { operationId: fallbackOperationId } : {}),
     responses,
+    "x-xpayapi-api-id": apiId,
     "x-payment-info": paymentInfo
   };
 }
@@ -467,8 +593,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function publicLlmsResponse(
   proxy: Proxy.Proxy,
+  apis: TraditionalApiConfig[],
   publicBaseUrl: string
 ): Promise<Response> {
+  if (apis.length > 1) {
+    const lines = [
+      "# pay-api-proxy HTTP APIs",
+      "",
+      `OpenAPI: ${publicBaseUrl}/openapi.json`,
+      "",
+      ...apis.map((api) => `- ${api.id}: ${publicBaseUrl}/api/${api.id}`)
+    ];
+    return new Response(lines.join("\n"), {
+      headers: { "content-type": "text/plain; charset=utf-8" }
+    });
+  }
+
   const response = await proxy.fetch(new Request(new URL("/api/llms.txt", publicBaseUrl)));
   if (!response.ok) return response;
   const text = await response.text();
@@ -481,6 +621,22 @@ function stripInternalServicePrefix(path: string, prefix: string): string {
   if (path === prefix) return "/";
   if (path.startsWith(`${prefix}/`)) return path.slice(prefix.length);
   return path;
+}
+
+function isAlwaysPlatformPath(path: string): boolean {
+  return path === "/openapi.json" ||
+    path === "/llms.txt" ||
+    path === "/api/openapi.json" ||
+    path === "/api/llms.txt" ||
+    path.startsWith("/receipts/");
+}
+
+function isOpenAiPlatformPath(path: string): boolean {
+  return path === "/v1/models" ||
+    path === "/v1/chat/completions" ||
+    path === "/v1/images/generations" ||
+    path === "/v1/payment-sessions" ||
+    path.startsWith("/v1/payment-sessions/");
 }
 
 function serializeBody(body: unknown): string | URLSearchParams | Buffer | undefined {

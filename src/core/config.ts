@@ -36,7 +36,7 @@ export interface AppConfig {
   openaiApiKey?: string;
   openaiBaseUrl: string;
   openaiEndpointWhitelist: OpenAiCompatibleEndpoint[];
-  traditionalApis: TraditionalApiConfig[];
+  apis: TraditionalApiConfig[];
   models: ModelConfig[];
   rateLimit: RateLimitConfig;
   tempo: {
@@ -75,6 +75,11 @@ export interface RateLimitConfig {
   timeWindowMs: number;
 }
 
+export interface TraditionalApiRateLimitConfig {
+  max?: number;
+  timeWindowMs?: number;
+}
+
 export interface TraditionalApiConfig {
   id: string;
   upstreamBaseUrl: string;
@@ -90,6 +95,7 @@ export interface TraditionalApiConfig {
   chainId: number;
   forwardedHeaders: string[];
   upstreamTimeoutMs: number;
+  rateLimit?: TraditionalApiRateLimitConfig;
   bearer?: string;
   headers?: Record<string, string>;
 }
@@ -122,6 +128,19 @@ const TEST_MODEL: ModelConfig = {
 
 const DOCKER_HOST_GATEWAY = "host.docker.internal";
 const LOCALHOST_NAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"]);
+const API_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
+const SINGLE_HTTP_API_ENV_OVERRIDES = [
+  "UPSTREAM_BASE_URL",
+  "DEFAULT_REQUEST_PRICE",
+  "ROUTE_PRICES",
+  "ROUTE_ALLOWLIST",
+  "OPENAPI_DOCUMENT_URL",
+  "OPENAPI_DOCUMENT_PATH",
+  "TRADITIONAL_API_ROUTES",
+  "TRADITIONAL_API_ROUTES_ONLY",
+  "TRADITIONAL_OPENAPI_DOCUMENT_URL",
+  "TRADITIONAL_OPENAPI_DOCUMENT_PATH"
+];
 
 export interface WorkerConfig {
   nodeEnv: string;
@@ -171,7 +190,7 @@ interface ConfigFileSettings {
   };
   openaiBaseUrl?: string;
   openaiEndpointWhitelist?: OpenAiCompatibleEndpoint[];
-  traditionalApis?: unknown[];
+  apis?: unknown[];
   models?: unknown[];
   tempo?: {
     rpcUrl?: string;
@@ -446,6 +465,19 @@ function parsePositiveInt(name: string, value: string): number {
   return parsed;
 }
 
+function parseOptionalPositiveIntField(
+  record: Record<string, unknown>,
+  fieldName: string,
+  errorName: string
+): number | undefined {
+  const value = record[fieldName];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || !Number.isInteger(value)) {
+    throw new Error(`${errorName}.${fieldName} must be a positive integer`);
+  }
+  return value;
+}
+
 function parseBool(name: string, value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -599,7 +631,30 @@ function parseTraditionalApiConfigList(
     throw new Error(`${name} must be an array`);
   }
 
-  return parsed.map((entry, index) => parseTraditionalApiConfig(entry, index, name, models, assetDecimals));
+  const apis = parsed.map((entry, index) => parseTraditionalApiConfig(entry, index, name, models, assetDecimals));
+  const enabledIds = new Set<string>();
+  for (const api of apis) {
+    if (!API_ID_PATTERN.test(api.id)) {
+      throw new Error(`${name}[].id must be a URL-safe lowercase slug (a-z, 0-9, "_" or "-")`);
+    }
+    if (!api.enabled) continue;
+    if (enabledIds.has(api.id)) {
+      throw new Error(`${name} contains duplicate enabled id: ${api.id}`);
+    }
+    enabledIds.add(api.id);
+  }
+
+  if (enabledIds.size > 1) {
+    const configuredOverrides = SINGLE_HTTP_API_ENV_OVERRIDES.filter((name) => optionalEnv(name) !== undefined);
+    if (configuredOverrides.length > 0) {
+      throw new Error(
+        `Multiple enabled APIs require per-API JSONC configuration; ` +
+        `unset single-upstream env override(s): ${configuredOverrides.join(", ")}`
+      );
+    }
+  }
+
+  return apis;
 }
 
 function parseTraditionalApiConfig(
@@ -735,6 +790,25 @@ function parseTraditionalApiConfig(
     }
     return value;
   };
+  const rateLimitValue = (): TraditionalApiRateLimitConfig | undefined => {
+    const value = api.rateLimit;
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${collectionName}[${index}].rateLimit must be an object`);
+    }
+    const rateLimit = value as Record<string, unknown>;
+    const max = parseOptionalPositiveIntField(rateLimit, "max", `${collectionName}[${index}].rateLimit`);
+    const timeWindowMs = parseOptionalPositiveIntField(
+      rateLimit,
+      "timeWindowMs",
+      `${collectionName}[${index}].rateLimit`
+    );
+    if (max === undefined && timeWindowMs === undefined) return undefined;
+    return {
+      ...(max !== undefined ? { max } : {}),
+      ...(timeWindowMs !== undefined ? { timeWindowMs } : {})
+    };
+  };
 
   const upstreamBaseUrlFromEnv = optionalEnv("UPSTREAM_BASE_URL");
   const upstreamBaseUrl = normalizeUpstreamBaseUrl(upstreamBaseUrlFromEnv ?? stringValue("upstreamBaseUrl"));
@@ -755,7 +829,7 @@ function parseTraditionalApiConfig(
     try {
       new URL(normalizedOpenApiDocumentUrl);
     } catch {
-      throw new Error("OPENAPI_DOCUMENT_URL/traditionalApis[].openApiDocumentUrl must be a valid URL");
+      throw new Error("OPENAPI_DOCUMENT_URL/apis[].openApiDocumentUrl must be a valid URL");
     }
   }
 
@@ -779,6 +853,7 @@ function parseTraditionalApiConfig(
     chainId: chainIdValue(),
     forwardedHeaders: forwardedHeadersValue(),
     upstreamTimeoutMs: upstreamTimeoutMsValue(),
+    rateLimit: rateLimitValue(),
     bearer: optionalStringValueFrom(api, `${collectionName}[${index}].bearer`, "bearer") ?? optionalEnv("UPSTREAM_BEARER_TOKEN"),
     headers: headersValue(api, `${collectionName}[${index}].headers`) ?? upstreamHeaderFromEnv()
   };
@@ -1121,9 +1196,17 @@ function publicBaseUrlFromConfig(fileConfig: ConfigFileSettings): string {
   return env("PUBLIC_BASE_URL", fallback).replace(/\/+$/, "");
 }
 
+function assertNoLegacyApiListField(fileConfig: ConfigFileSettings): void {
+  const legacyApiListField = "traditional" + "Apis";
+  if (Object.prototype.hasOwnProperty.call(fileConfig as Record<string, unknown>, legacyApiListField)) {
+    throw new Error('Configure upstream APIs with top-level "apis".');
+  }
+}
+
 export function loadConfig(): AppConfig {
   loadDotEnv(".env");
   const fileConfig = readConfigFile();
+  assertNoLegacyApiListField(fileConfig);
   const nodeEnv = env("NODE_ENV", fileConfig.nodeEnv ?? DEFAULT_APP_SETTINGS.nodeEnv);
   const databasePath = env("DATABASE_PATH", fileConfig.databasePath ?? DEFAULT_APP_SETTINGS.databasePath);
   const nodeSigningSecret = resolveNodeSigningSecret(nodeEnv, databasePath);
@@ -1186,8 +1269,8 @@ export function loadConfig(): AppConfig {
       : fileConfig.openaiEndpointWhitelist
         ? parseOpenAiEndpointWhitelistEntries(fileConfig.openaiEndpointWhitelist, "openaiEndpointWhitelist")
         : DEFAULT_APP_SETTINGS.openaiEndpointWhitelist,
-    traditionalApis: fileConfig.traditionalApis
-      ? parseTraditionalApiConfigList(fileConfig.traditionalApis, "traditionalApis", models, assetDecimals)
+    apis: fileConfig.apis
+      ? parseTraditionalApiConfigList(fileConfig.apis, "apis", models, assetDecimals)
       : [],
     models,
     rateLimit: parseRateLimitConfig(fileConfig),
@@ -1255,7 +1338,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     },
     openaiBaseUrl: DEFAULT_APP_SETTINGS.openaiBaseUrl,
     openaiEndpointWhitelist: DEFAULT_APP_SETTINGS.openaiEndpointWhitelist,
-    traditionalApis: [],
+    apis: [],
     models: [TEST_MODEL, ...DEFAULT_MODELS],
     rateLimit: { max: 10_000, imageMax: 10_000, timeWindowMs: 60_000 },
     tempo: {

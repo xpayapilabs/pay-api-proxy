@@ -23,20 +23,19 @@
   // "tempo-mainnet" for Tempo mainnet (chainId 4217) when you're ready for real funds.
   "paymentProvider": "tempo-testnet",
 
-  // For traditional HTTP APIs this field is effectively unused — the mppx
+  // For HTTP API proxying this field is effectively unused — the mppx
   // Proxy mounts its own per-request charge handler regardless. "per-request"
   // is the most descriptive value; "ai-token" also works.
   "chargingMethod": "per-request",
 
-  // "http" exposes only configured traditionalApis. Set to "openai" only if
+  // "http" exposes only configured apis. Set to "openai" only if
   // you also want this node to serve /v1/chat/completions etc.
   "upstreamProvider": "http",
 
   // ────────── REQUIRED: at least one paid HTTP API ──────────
-  // Each entry in this array mounts ONE upstream HTTP API at the node's root
-  // ("/", transparent mount). Currently only one enabled API is supported per
-  // node (single-API mount mode); future versions will allow multiple under
-  // /api/<id>/ prefixes.
+  // One enabled entry mounts transparently at the node root ("/").
+  // Multiple enabled entries mount under /api/<id>/ prefixes, for example
+  // /api/fx/v1/quote and /api/weather/v1/forecast.
   //
   // Per-entry fields:
   //   id              REQUIRED  internal identifier, also used in receipts
@@ -49,6 +48,8 @@
   //   methods         optional  HTTP methods allowed at the root level
   //                             (default: ["GET","POST","PUT","PATCH","DELETE"])
   //   routes          optional  per-route price + method + bearer/header overrides
+  //   rateLimit       optional  per-IP limit for this upstream API
+  //                             ({ "max": 120, "timeWindowMs": 60000 })
   //   bearer          optional  injected as `Authorization: Bearer …` upstream
   //   headers         optional  arbitrary headers injected on every upstream call
   //   upstreamTimeoutMs optional upstream deadline in milliseconds (default 30000)
@@ -60,16 +61,17 @@
   //   assetAddress    optional  TIP-20 token to bill in (default: tempo.acceptedAsset)
   //   chainId         optional  chain to settle on (default: tempo.chainId)
   //   enabled         optional  default true
-  "traditionalApis": [
+  "apis": [
     {
       "id": "fx",
       "upstreamBaseUrl": "https://your-upstream-api.example",
       "pricing": { "request": "0.0005" },                  // default $0.0005 per call
       "methods": ["GET", "POST"],
+      "rateLimit": { "max": 120, "timeWindowMs": 60000 },
 
       // Operator-side auth injected on every upstream call. Pick whichever the
       // upstream expects:
-      "bearer": "your-upstream-bearer-token-here",
+      //"bearer": "your-upstream-bearer-token-here",
       // "headers": { "x-api-key": "your-upstream-key", "x-tenant": "your-tenant" },
 
       // Per-route price overrides. Route paths support exact matches,

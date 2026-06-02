@@ -12,7 +12,7 @@
     "waitForConfirmation": false
   },
 
-  "traditionalApis": [{
+  "apis": [{
     "id": "smoke",
     "enabled": true,
     "upstreamBaseUrl": "http://127.0.0.1:18081",

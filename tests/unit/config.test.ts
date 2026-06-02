@@ -342,12 +342,13 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "fx",
           upstreamBaseUrl: "https://demo-fx.example",
           methods: ["GET"],
           requestPrice: "500",
           upstreamTimeoutMs: 1234,
+          rateLimit: { max: 25, timeWindowMs: 10_000 },
           bearer: "service-token",
           headers: { "x-api-key": "service-key" },
           routes: [
@@ -371,17 +372,39 @@ describe("config", () => {
     process.env.PAY_API_PROXY_CONFIG = configPath;
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].id).toBe("fx");
-    expect(config.traditionalApis[0].methods).toEqual(["GET"]);
-    expect(config.traditionalApis[0].requestPrice).toBe(500n);
-    expect(config.traditionalApis[0].upstreamTimeoutMs).toBe(1234);
-    expect(config.traditionalApis[0].bearer).toBe("service-token");
-    expect(config.traditionalApis[0].headers).toEqual({ "x-api-key": "service-key" });
-    expect(config.traditionalApis[0].routes[0].path).toBe("/v1/live/*");
-    expect(config.traditionalApis[0].routes[0].requestPrice).toBe(2500n);
-    expect(config.traditionalApis[0].routes[0].bearer).toBe("live-token");
-    expect(config.traditionalApis[0].routes[0].headers).toEqual({ "x-api-key": "live-key" });
-    expect(config.traditionalApis[0].routes[1].methods).toEqual(["GET"]);
+    expect(config.apis[0].id).toBe("fx");
+    expect(config.apis[0].methods).toEqual(["GET"]);
+    expect(config.apis[0].requestPrice).toBe(500n);
+    expect(config.apis[0].upstreamTimeoutMs).toBe(1234);
+    expect(config.apis[0].rateLimit).toEqual({ max: 25, timeWindowMs: 10_000 });
+    expect(config.apis[0].bearer).toBe("service-token");
+    expect(config.apis[0].headers).toEqual({ "x-api-key": "service-key" });
+    expect(config.apis[0].routes[0].path).toBe("/v1/live/*");
+    expect(config.apis[0].routes[0].requestPrice).toBe(2500n);
+    expect(config.apis[0].routes[0].bearer).toBe("live-token");
+    expect(config.apis[0].routes[0].headers).toEqual({ "x-api-key": "live-key" });
+    expect(config.apis[0].routes[1].methods).toEqual(["GET"]);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rejects the legacy API list field", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-legacy-api-list-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        ["traditional" + "Apis"]: [{
+          id: "fx",
+          upstreamBaseUrl: "https://demo-fx.example",
+          pricing: { request: "0.0005" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    expect(() => loadConfig()).toThrow(/top-level "apis"/);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -392,7 +415,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" },
@@ -406,10 +429,89 @@ describe("config", () => {
     process.env.PAY_API_PROXY_CONFIG = configPath;
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].requestPrice).toBe(1_000n);
-    expect(config.traditionalApis[0].routes[0].requestPrice).toBe(2_500n);
-    expect(config.traditionalApis[0].methods).toEqual(["GET", "POST", "PUT", "PATCH", "DELETE"]);
-    expect(config.traditionalApis[0].upstreamTimeoutMs).toBe(30_000);
+    expect(config.apis[0].requestPrice).toBe(1_000n);
+    expect(config.apis[0].routes[0].requestPrice).toBe(2_500n);
+    expect(config.apis[0].methods).toEqual(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+    expect(config.apis[0].upstreamTimeoutMs).toBe(30_000);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("loads partial per-upstream rate limit configuration", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-rate-limit-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        apis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" },
+          rateLimit: { max: 12 }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    const config = loadConfig();
+    expect(config.apis[0].rateLimit).toEqual({ max: 12 });
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rejects invalid and duplicate traditional API ids", () => {
+    const invalidDirectory = mkdtempSync(join(tmpdir(), "pay-api-proxy-invalid-api-id-"));
+    const invalidConfigPath = join(invalidDirectory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      invalidConfigPath,
+      JSON.stringify({
+        apis: [{
+          id: "Bad Id",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = invalidConfigPath;
+    expect(() => loadConfig()).toThrow(/URL-safe lowercase slug/);
+    rmSync(invalidDirectory, { recursive: true, force: true });
+
+    const duplicateDirectory = mkdtempSync(join(tmpdir(), "pay-api-proxy-duplicate-api-id-"));
+    const duplicateConfigPath = join(duplicateDirectory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      duplicateConfigPath,
+      JSON.stringify({
+        apis: [
+          { id: "weather", upstreamBaseUrl: "https://weather.example", pricing: { request: "0.001" } },
+          { id: "weather", upstreamBaseUrl: "https://weather-2.example", pricing: { request: "0.001" } }
+        ]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = duplicateConfigPath;
+    expect(() => loadConfig()).toThrow(/duplicate enabled id: weather/);
+    rmSync(duplicateDirectory, { recursive: true, force: true });
+  });
+
+  it("rejects single-upstream env shortcuts when multiple traditional APIs are enabled", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-multi-env-shortcut-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        apis: [
+          { id: "fx", upstreamBaseUrl: "https://fx.example", pricing: { request: "0.001" } },
+          { id: "weather", upstreamBaseUrl: "https://weather.example", pricing: { request: "0.001" } }
+        ]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.ROUTE_PRICES = "GET:/v1/quote=0.0005";
+
+    expect(() => loadConfig()).toThrow(/Multiple enabled APIs require per-API JSONC/);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -420,7 +522,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -432,7 +534,7 @@ describe("config", () => {
     process.env.UPSTREAM_BASE_URL = "http://host.docker.internal:8000";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].upstreamBaseUrl).toBe("http://host.docker.internal:8000");
+    expect(config.apis[0].upstreamBaseUrl).toBe("http://host.docker.internal:8000");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -443,7 +545,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -456,7 +558,7 @@ describe("config", () => {
     process.env.UPSTREAM_BASE_URL = "http://localhost:8000";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].upstreamBaseUrl).toBe("http://host.docker.internal:8000");
+    expect(config.apis[0].upstreamBaseUrl).toBe("http://host.docker.internal:8000");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -467,7 +569,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -479,7 +581,7 @@ describe("config", () => {
     process.env.UPSTREAM_BEARER_TOKEN = "env-upstream-token";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].bearer).toBe("env-upstream-token");
+    expect(config.apis[0].bearer).toBe("env-upstream-token");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -490,7 +592,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -503,7 +605,7 @@ describe("config", () => {
     process.env.UPSTREAM_AUTH_HEADER_VALUE = "env-upstream-key";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].headers).toEqual({ "x-api-key": "env-upstream-key" });
+    expect(config.apis[0].headers).toEqual({ "x-api-key": "env-upstream-key" });
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -514,7 +616,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -526,7 +628,7 @@ describe("config", () => {
     process.env.DEFAULT_REQUEST_PRICE = "0.0025";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].requestPrice).toBe(2_500n);
+    expect(config.apis[0].requestPrice).toBe(2_500n);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -537,7 +639,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" },
@@ -558,17 +660,17 @@ describe("config", () => {
     process.env.OPENAPI_DOCUMENT_PATH = "/srv/openapi.json";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].routes).toHaveLength(2);
-    expect(config.traditionalApis[0].routes[0]).toMatchObject({
+    expect(config.apis[0].routes).toHaveLength(2);
+    expect(config.apis[0].routes[0]).toMatchObject({
       id: "forecast",
       path: "/v1/forecast/{city}",
       methods: ["GET"]
     });
-    expect(config.traditionalApis[0].routes[0].requestPrice).toBe(2_500n);
-    expect(config.traditionalApis[0].routes[1].requestPrice).toBe(3_000n);
-    expect(config.traditionalApis[0].allowUnmatchedRoutes).toBe(false);
-    expect(config.traditionalApis[0].openApiDocumentUrl).toBe("http://localhost:8000/openapi.json");
-    expect(config.traditionalApis[0].openApiDocumentPath).toBe("/srv/openapi.json");
+    expect(config.apis[0].routes[0].requestPrice).toBe(2_500n);
+    expect(config.apis[0].routes[1].requestPrice).toBe(3_000n);
+    expect(config.apis[0].allowUnmatchedRoutes).toBe(false);
+    expect(config.apis[0].openApiDocumentUrl).toBe("http://localhost:8000/openapi.json");
+    expect(config.apis[0].openApiDocumentPath).toBe("/srv/openapi.json");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -579,7 +681,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -594,10 +696,10 @@ describe("config", () => {
     process.env.TRADITIONAL_OPENAPI_DOCUMENT_PATH = "/srv/openapi.json";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].routes).toHaveLength(1);
-    expect(config.traditionalApis[0].allowUnmatchedRoutes).toBe(false);
-    expect(config.traditionalApis[0].openApiDocumentUrl).toBe("http://localhost:8000/openapi.json");
-    expect(config.traditionalApis[0].openApiDocumentPath).toBe("/srv/openapi.json");
+    expect(config.apis[0].routes).toHaveLength(1);
+    expect(config.apis[0].allowUnmatchedRoutes).toBe(false);
+    expect(config.apis[0].openApiDocumentUrl).toBe("http://localhost:8000/openapi.json");
+    expect(config.apis[0].openApiDocumentPath).toBe("/srv/openapi.json");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -608,7 +710,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -621,7 +723,7 @@ describe("config", () => {
     delete process.env.TRADITIONAL_OPENAPI_DOCUMENT_URL;
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].openApiDocumentUrl).toBe("http://host.docker.internal:8000/openapi.json");
+    expect(config.apis[0].openApiDocumentUrl).toBe("http://host.docker.internal:8000/openapi.json");
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -632,7 +734,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
@@ -645,13 +747,13 @@ describe("config", () => {
     process.env.ROUTE_ALLOWLIST = "true";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].routes).toHaveLength(2);
-    expect(config.traditionalApis[0].routes[0]).toMatchObject({
+    expect(config.apis[0].routes).toHaveLength(2);
+    expect(config.apis[0].routes[0]).toMatchObject({
       path: "/v1/quote",
       methods: ["GET"]
     });
-    expect(config.traditionalApis[0].routes[0].requestPrice).toBe(500n);
-    expect(config.traditionalApis[0].routes[1].requestPrice).toBe(3_000n);
+    expect(config.apis[0].routes[0].requestPrice).toBe(500n);
+    expect(config.apis[0].routes[1].requestPrice).toBe(3_000n);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -662,7 +764,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "deepl",
           upstreamBaseUrl: "https://deepl.example",
           pricing: { request: "0.001" }
@@ -676,12 +778,12 @@ describe("config", () => {
     process.env.ROUTE_ALLOWLIST = "true";
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].routes).toHaveLength(3);
-    expect(config.traditionalApis[0].routes[1]).toMatchObject({
+    expect(config.apis[0].routes).toHaveLength(3);
+    expect(config.apis[0].routes[1]).toMatchObject({
       path: "/deepl/rephrase",
       methods: ["POST"]
     });
-    expect(config.traditionalApis[0].routes[1].requestPrice).toBe(0n);
+    expect(config.apis[0].routes[1].requestPrice).toBe(0n);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -692,7 +794,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "deepl",
           upstreamBaseUrl: "https://deepl.example",
           pricing: { request: "0.001" }
@@ -706,9 +808,9 @@ describe("config", () => {
     delete process.env.ROUTE_ALLOWLIST;
 
     const config = loadConfig();
-    expect(config.traditionalApis[0].routes).toHaveLength(3);
-    expect(config.traditionalApis[0].allowUnmatchedRoutes).toBe(false);
-    expect(config.traditionalApis[0].routes[2].requestPrice).toBe(500n);
+    expect(config.apis[0].routes).toHaveLength(3);
+    expect(config.apis[0].allowUnmatchedRoutes).toBe(false);
+    expect(config.apis[0].routes[2].requestPrice).toBe(500n);
 
     rmSync(directory, { recursive: true, force: true });
   });
@@ -719,7 +821,7 @@ describe("config", () => {
     writeFileSync(
       configPath,
       JSON.stringify({
-        traditionalApis: [{
+        apis: [{
           id: "weather",
           upstreamBaseUrl: "https://weather.example",
           pricing: { request: "0.001" }
