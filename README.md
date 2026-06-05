@@ -67,12 +67,12 @@ Native `mppx.session()` support can be enabled for clients that send `Authorizat
 
 Set `MPPX_SESSION_PRIVATE_KEY` in `.env` to a Tempo wallet private key the server can use to settle or close channels, and set `mppxSession.secretKey` only if AI sessions should use a challenge secret separate from fixed-charge mppx. When native mppx sessions are enabled, requests without `x-mpp-session-id` receive an mppx session `402` challenge. The node validates the mppx session credential, calls OpenAI, then settles the native channel spend to actual metered token usage. Native mppx channel state is persisted in the node SQLite database.
 
-Traditional APIs are configured with `traditionalApis`:
+HTTP upstream APIs are configured with `apis`:
 
 ```jsonc
 {
   "chargingMethod": "per-request",
-  "traditionalApis": [
+  "apis": [
     {
       "id": "fx",
       "upstreamBaseUrl": "https://demo-fx.example",
@@ -199,7 +199,7 @@ wallet, public domain/base URL, Tempo network values, directory publishing, and
 secrets. For manual setup, prefer JSONC route pricing over `ROUTE_PRICES`;
 `ROUTE_PRICES` is a single-upstream shortcut for generated install commands.
 
-One enabled `traditionalApis[]` entry is published at the root path, so
+One enabled `apis[]` entry is published at the root path, so
 `/v1/quote` forwards to the upstream `/v1/quote`. Multiple enabled entries are
 published under `/api/{id}`, such as `/api/fx/v1/quote` and
 `/api/weather/v1/forecast`. In multiple-upstream mode, configure
@@ -286,7 +286,7 @@ PUBLIC_BASE_URL=https://api.example.com
 On startup, the worker calls the public registration endpoint with only
 `PUBLIC_BASE_URL`. The URL must be a real domain-name base URL, not localhost,
 an IP address, or a URL with a path. The directory fetches this node's
-`/health` and `/openapi.json`, then imports configured `traditionalApis` and
+`/health` and `/openapi.json`, then imports configured `apis` and
 OpenAI-compatible model endpoints only when `upstreamProvider` is `openai`.
 
 Quick Cloudflare tunnels print a temporary URL in `docker compose logs

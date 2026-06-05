@@ -1,0 +1,44 @@
+name = "pay-api-proxy-worker"
+main = "src/adapters/cloudflare-worker/worker.ts"
+compatibility_date = "2026-06-03"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+PUBLIC_BASE_URL = "https://api.example.com"
+TEMPO_RPC_URL = "https://rpc.moderato.tempo.xyz"
+TEMPO_CHAIN_ID = "42431"
+TEMPO_SETTLEMENT_ADDRESS = "0x0000000000000000000000000000000000000000"
+TEMPO_ACCEPTED_ASSET = "0x20c0000000000000000000000000000000000000"
+TEMPO_ASSET_DECIMALS = "6"
+
+# Put real secrets in `wrangler secret put MPP_SECRET_KEY`.
+# PAY_API_PROXY_CONFIG can also be set as a secret if it includes upstream keys.
+PAY_API_PROXY_CONFIG = """
+{
+  "publicBaseUrl": "https://api.example.com",
+  "rateLimit": { "max": 120, "timeWindowMs": 60000 },
+  "apis": [
+    {
+      "id": "fx",
+      "upstreamBaseUrl": "https://upstream.example.com",
+      "methods": ["GET", "POST"],
+      "pricing": { "request": "0.001" },
+      "routes": [
+        { "id": "quote", "path": "/v1/quote", "methods": ["GET"], "pricing": { "request": "0.001" } },
+        { "id": "live", "path": "/v1/live/*", "methods": ["GET"], "pricing": { "request": "0.002" } },
+        { "id": "status", "path": "/v1/status", "methods": ["GET"], "pricing": { "request": "0" } }
+      ],
+      "forwardedHeaders": ["accept", "content-type"],
+      "upstreamTimeoutMs": 30000
+    }
+  ]
+}
+"""
+
+[[durable_objects.bindings]]
+name = "MPPX_STORE"
+class_name = "MppxStoreDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MppxStoreDurableObject"]

@@ -1,16 +1,13 @@
-import { dirname } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import type { FastifyRequest } from "fastify";
 import { Credential } from "mppx";
-import { Mppx, Store, tempo } from "mppx/server";
+import { Mppx, tempo } from "mppx/server";
 import { Session as MppxTempoSession } from "mppx/tempo";
 import { privateKeyToAccount } from "viem/accounts";
+import { createSqliteMppxStore } from "../adapters/node-container/mppx-store-sqlite.js";
 import type { AppConfig } from "../core/config.js";
+import { rawAmountToDecimalString } from "../core/money.js";
+import type { MppxStoreHandle } from "../ports/mppx-store.js";
 import type { PriceQuote, SessionSettlementAmount } from "../charging/index.js";
-
-// Local alias for the mppx Store.AtomicStore type so a future mppx rename doesn't break us at a distance.
-type MppxAtomicStore = Store.AtomicStore;
 
 export type MppxSessionAuthorization =
   | { kind: "challenge"; response: Response }
@@ -34,11 +31,6 @@ interface MppxSessionServer {
       unitType: string;
     }): TempoSessionHandler;
   };
-}
-
-export interface MppxStoreHandle {
-  store: MppxAtomicStore;
-  close(): void;
 }
 
 export class MppxSessionAdapter {
@@ -150,19 +142,7 @@ export function createMppxSessionAdapter(config: AppConfig): MppxSessionAdapter 
   return config.mppxSession.enabled ? new MppxSessionAdapter(config) : undefined;
 }
 
-export function rawAmountToDecimalString(amount: bigint, decimals: number): string {
-  if (!Number.isInteger(decimals) || decimals < 0) {
-    throw new Error("mppx session decimals must be a non-negative integer");
-  }
-  const negative = amount < 0n;
-  const absolute = negative ? -amount : amount;
-  const scale = 10n ** BigInt(decimals);
-  const whole = absolute / scale;
-  const fractional = absolute % scale;
-  if (fractional === 0n) return `${negative ? "-" : ""}${whole.toString()}`;
-  const fractionText = fractional.toString().padStart(decimals, "0").replace(/0+$/, "");
-  return `${negative ? "-" : ""}${whole.toString()}.${fractionText}`;
-}
+export { rawAmountToDecimalString };
 
 export async function settleReservedChannelUsage(
   store: MppxTempoSession.ChannelStore.ChannelStore,
@@ -232,73 +212,7 @@ export async function releaseReservedChannelAuthorization(
 }
 
 export function createMppxStore(config: AppConfig): MppxStoreHandle {
-  if (config.databasePath === ":memory:") {
-    return { store: Store.memory(), close: () => {} };
-  }
-
-  const directory = dirname(config.databasePath);
-  if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
-
-  const db = new DatabaseSync(config.databasePath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS mppx_store (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )
-  `);
-
-  // mppx exposes a Cloudflare-KV-shaped helper as its generic atomic-store adapter.
-  // We satisfy that shape with SQLite so the channel store persists across restarts.
-  const store = Store.cloudflare({
-    async get(key) {
-      const row = db.prepare("SELECT value FROM mppx_store WHERE key = ?").get(key) as { value: string } | undefined;
-      return row?.value ?? null;
-    },
-    async put(key, value) {
-      db.prepare(`
-        INSERT INTO mppx_store (key, value)
-        VALUES (?, ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run(key, value);
-    },
-    async delete(key) {
-      db.prepare("DELETE FROM mppx_store WHERE key = ?").run(key);
-    },
-    async update(key, fn) {
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        const row = db.prepare("SELECT value FROM mppx_store WHERE key = ?").get(key) as { value: string } | undefined;
-        const change = fn(row?.value ?? null);
-        if (change.op === "set") {
-          db.prepare(`
-            INSERT INTO mppx_store (key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-          `).run(key, change.value);
-        } else if (change.op === "delete") {
-          db.prepare("DELETE FROM mppx_store WHERE key = ?").run(key);
-        }
-        db.exec("COMMIT");
-        return change.result;
-      } catch (error) {
-        try {
-          db.exec("ROLLBACK");
-        } catch {
-          // Ignore rollback errors after a failed SQLite statement.
-        }
-        throw error;
-      }
-    }
-  });
-
-  return {
-    store,
-    close: () => {
-      db.close();
-    }
-  };
+  return createSqliteMppxStore(config.databasePath);
 }
 
 function toFetchRequest(request: FastifyRequest, body: Record<string, unknown>, publicBaseUrl: string): Request {
