@@ -2,6 +2,7 @@ import { Proxy, Service } from "mppx/proxy";
 import { Mppx, tempo } from "mppx/server";
 import type { AppConfig, TraditionalApiConfig, TraditionalApiRouteConfig } from "../config.js";
 import { rawAmountToDecimalString } from "../money.js";
+import { applyRequestRewrite, RequestRewriteError } from "../request-rewrite.js";
 import type { MppxStoreHandle } from "../../ports/mppx-store.js";
 
 export interface PaidHttpProxy {
@@ -122,6 +123,14 @@ async function fetchWithUpstreamTimeout(proxy: Proxy.Proxy, request: Request, ti
         }
       }, { status: 504 });
     }
+    if (error instanceof RequestRewriteError) {
+      return Response.json({
+        error: {
+          code: "request_rewrite_failed",
+          message: error.message
+        }
+      }, { status: 400 });
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -208,9 +217,9 @@ function routeKeySpecificity(routeKey: string): number {
 
 export function prepareTraditionalUpstreamRequest(
   request: Request,
-  api: Pick<TraditionalApiConfig, "bearer" | "forwardedHeaders" | "headers">,
+  api: Pick<TraditionalApiConfig, "bearer" | "forwardedHeaders" | "headers" | "requestRewrite">,
   options: Record<string, unknown> = {}
-): Request {
+): Promise<Request> {
   const filtered = filterForwardedHeaders(request, api.forwardedHeaders);
   const headers = new Headers(filtered.headers);
   const routeHeaders = isHeaderMap(options.headers) ? options.headers : undefined;
@@ -223,7 +232,7 @@ export function prepareTraditionalUpstreamRequest(
   }
   const bearer = typeof options.bearer === "string" ? options.bearer : api.bearer;
   if (bearer) headers.set("authorization", `Bearer ${bearer}`);
-  return new Request(filtered, { headers });
+  return applyRequestRewrite(new Request(filtered, { headers }), api.requestRewrite);
 }
 
 function traditionalEndpointOptions(

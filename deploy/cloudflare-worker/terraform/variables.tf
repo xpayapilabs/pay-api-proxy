@@ -92,9 +92,91 @@ variable "workers_dev_previews_enabled" {
   default     = false
 }
 
+variable "worker_observability_enabled" {
+  description = "Whether Workers Observability is enabled."
+  type        = bool
+  default     = true
+}
+
+variable "worker_observability_head_sampling_rate" {
+  description = "Workers Observability sampling rate. 1 means 100%, 0.1 means 10%."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.worker_observability_head_sampling_rate >= 0 && var.worker_observability_head_sampling_rate <= 1
+    error_message = "worker_observability_head_sampling_rate must be between 0 and 1."
+  }
+}
+
+variable "worker_observability_logs_enabled" {
+  description = "Whether Workers Observability logs are enabled."
+  type        = bool
+  default     = true
+}
+
+variable "worker_observability_logs_head_sampling_rate" {
+  description = "Workers Observability log sampling rate. 1 means 100%, 0.1 means 10%."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.worker_observability_logs_head_sampling_rate >= 0 && var.worker_observability_logs_head_sampling_rate <= 1
+    error_message = "worker_observability_logs_head_sampling_rate must be between 0 and 1."
+  }
+}
+
+variable "worker_observability_logs_invocation_logs" {
+  description = "Whether Workers invocation logs are enabled."
+  type        = bool
+  default     = true
+}
+
+variable "worker_observability_logs_persist" {
+  description = "Whether Workers Observability logs are persisted."
+  type        = bool
+  default     = true
+}
+
+variable "worker_observability_traces_enabled" {
+  description = "Whether Workers Observability traces are enabled."
+  type        = bool
+  default     = true
+}
+
+variable "worker_observability_traces_head_sampling_rate" {
+  description = "Workers Observability trace sampling rate. 1 means 100%, 0.1 means 10%."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.worker_observability_traces_head_sampling_rate >= 0 && var.worker_observability_traces_head_sampling_rate <= 1
+    error_message = "worker_observability_traces_head_sampling_rate must be between 0 and 1."
+  }
+}
+
+variable "worker_observability_traces_persist" {
+  description = "Whether Workers Observability traces are persisted."
+  type        = bool
+  default     = true
+}
+
 variable "pay_api_proxy_config" {
   description = "PAY_API_PROXY_CONFIG JSON/JSONC string. Put apis[], route prices, upstream auth, and per-API rate limits here."
   type        = string
+  sensitive   = true
+}
+
+variable "extra_plain_text_bindings" {
+  description = "Additional non-secret Worker JSON string bindings, for example feature flags used by PAY_API_PROXY_CONFIG."
+  type        = map(string)
+  default     = {}
+}
+
+variable "extra_secret_text_bindings" {
+  description = "Additional sensitive Worker JSON string bindings, for example vendor API keys referenced from requestRewrite env values. These avoid a Cloudflare provider secret_text sensitivity bug; protect Terraform state."
+  type        = map(string)
+  default     = {}
   sensitive   = true
 }
 

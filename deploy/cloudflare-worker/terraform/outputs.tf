@@ -1,16 +1,16 @@
 output "worker_name" {
   description = "Cloudflare Worker service name."
-  value       = cloudflare_worker.pay_api_proxy.name
+  value       = cloudflare_workers_script.pay_api_proxy.script_name
 }
 
-output "worker_version_id" {
-  description = "Published Worker version ID."
-  value       = cloudflare_worker_version.pay_api_proxy.id
+output "worker_script_id" {
+  description = "Cloudflare Worker script resource ID."
+  value       = cloudflare_workers_script.pay_api_proxy.id
 }
 
-output "deployment_id" {
-  description = "Active Worker deployment ID."
-  value       = cloudflare_workers_deployment.pay_api_proxy.id
+output "worker_script_etag" {
+  description = "Cloudflare Worker script ETag after upload."
+  value       = cloudflare_workers_script.pay_api_proxy.etag
 }
 
 output "custom_domain_hostname" {

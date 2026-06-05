@@ -1,9 +1,15 @@
+
+
+#export CLOUDFLARE_API_TOKEN="your-cloudflare-api-token"
+
 cloudflare_account_id = "replace-with-cloudflare-account-id"
 cloudflare_zone_id    = "replace-with-zone-id"
 
 worker_name            = "pay-api-proxy-worker"
 custom_domain_hostname = "api.example.com"
 public_base_url        = "https://api.example.com"
+
+worker_observability_enabled = true
 
 # First deploy only:
 #   terraform apply -var='deployment_phase=bootstrap'
@@ -12,6 +18,10 @@ deployment_phase = "normal"
 
 mpp_secret_key           = "replace-with-random-secret"
 tempo_settlement_address = "0x0000000000000000000000000000000000000000"
+
+extra_secret_text_bindings = {
+  VENDOR_FX_API_KEY = "replace-with-vendor-fx-api-key"
+}
 
 pay_api_proxy_config = <<JSON
 {
@@ -28,6 +38,15 @@ pay_api_proxy_config = <<JSON
         { "id": "status", "path": "/v1/status", "methods": ["GET"], "pricing": { "request": "0" } }
       ],
       "rateLimit": { "max": 60, "timeWindowMs": 60000 },
+      "requestRewrite": {
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "mode": "mergeJson",
+          "json": {
+            "key": { "env": "VENDOR_FX_API_KEY" }
+          }
+        }
+      },
       "forwardedHeaders": ["accept", "content-type"],
       "upstreamTimeoutMs": 30000
     },

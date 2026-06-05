@@ -233,6 +233,56 @@ describe("API integration", () => {
     await upstream.close();
   });
 
+  it("applies upstream-level request rewrite to every traditional API route", async () => {
+    const upstream = await startTraditionalUpstream();
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      apis: [{
+        id: "verify",
+        upstreamBaseUrl: upstream.baseUrl,
+        enabled: true,
+        methods: ["POST"],
+        requestPrice: 0n,
+        routes: [
+          { id: "verify-code", path: "/v1/verify", methods: ["POST"], requestPrice: 0n },
+          { id: "resend-code", path: "/v1/resend", methods: ["POST"], requestPrice: 0n }
+        ],
+        allowUnmatchedRoutes: false,
+        forwardedHeaders: ["content-type"],
+        upstreamTimeoutMs: 30_000,
+        requestRewrite: {
+          headers: { "content-type": "application/json" },
+          body: {
+            mode: "mergeJson",
+            json: { key: "vendor-key" }
+          }
+        },
+        assetSymbol: "pathUSD",
+        assetAddress: "0x20c0000000000000000000000000000000000000",
+        chainId: 42431
+      }]
+    });
+
+    const verify = await harness.app.inject({
+      method: "POST",
+      url: "/v1/verify",
+      payload: { verifycode: "123456" }
+    });
+    const resend = await harness.app.inject({
+      method: "POST",
+      url: "/v1/resend",
+      payload: { verifycode: "654321" }
+    });
+
+    expect(verify.statusCode).toBe(200);
+    expect(verify.json().body).toEqual({ key: "vendor-key", verifycode: "123456" });
+    expect(resend.statusCode).toBe(200);
+    expect(resend.json().body).toEqual({ key: "vendor-key", verifycode: "654321" });
+
+    await harness.close();
+    await upstream.close();
+  });
+
   it("charges route-specific prices for a traditional API", async () => {
     const upstream = await startTraditionalUpstream();
     const harness = buildHarness({

@@ -5,6 +5,7 @@ import type { ChargingMethodName } from "../charging/types.js";
 import { DEFAULT_APP_SETTINGS } from "./default-config.js";
 import { parseJsoncObject } from "./jsonc.js";
 import { DEFAULT_MODELS, type ModelConfig } from "./models.js";
+import { parseRequestRewriteConfig, type RequestRewriteConfig } from "./request-rewrite.js";
 
 export type PaymentProviderName = "tempo-testnet" | "tempo-mainnet";
 export type UpstreamProviderName = "http" | "openai";
@@ -96,6 +97,7 @@ export interface TraditionalApiConfig {
   forwardedHeaders: string[];
   upstreamTimeoutMs: number;
   rateLimit?: TraditionalApiRateLimitConfig;
+  requestRewrite?: RequestRewriteConfig;
   bearer?: string;
   headers?: Record<string, string>;
 }
@@ -854,6 +856,11 @@ function parseTraditionalApiConfig(
     forwardedHeaders: forwardedHeadersValue(),
     upstreamTimeoutMs: upstreamTimeoutMsValue(),
     rateLimit: rateLimitValue(),
+    requestRewrite: parseRequestRewriteConfig(
+      api.requestRewrite,
+      `${collectionName}[${index}].requestRewrite`,
+      optionalEnv
+    ),
     bearer: optionalStringValueFrom(api, `${collectionName}[${index}].bearer`, "bearer") ?? optionalEnv("UPSTREAM_BEARER_TOKEN"),
     headers: headersValue(api, `${collectionName}[${index}].headers`) ?? upstreamHeaderFromEnv()
   };

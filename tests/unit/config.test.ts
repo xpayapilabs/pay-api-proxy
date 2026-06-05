@@ -54,7 +54,8 @@ const SAVED_KEYS = [
   "PAY_API_PROXY_CONFIG",
   "PAY_API_PROXY_SKIP_DOTENV",
   "PAY_API_PROXY_DOCKER_RUNTIME",
-  "XPAYAPI_PUBLISH_ENABLED"
+  "XPAYAPI_PUBLISH_ENABLED",
+  "VENDOR_VERIFY_KEY"
 ];
 
 describe("config", () => {
@@ -349,6 +350,15 @@ describe("config", () => {
           requestPrice: "500",
           upstreamTimeoutMs: 1234,
           rateLimit: { max: 25, timeWindowMs: 10_000 },
+          requestRewrite: {
+            headers: { "content-type": "application/json" },
+            body: {
+              mode: "mergeJson",
+              json: {
+                key: { env: "VENDOR_VERIFY_KEY" }
+              }
+            }
+          },
           bearer: "service-token",
           headers: { "x-api-key": "service-key" },
           routes: [
@@ -370,6 +380,7 @@ describe("config", () => {
     );
 
     process.env.PAY_API_PROXY_CONFIG = configPath;
+    process.env.VENDOR_VERIFY_KEY = "vendor-secret";
 
     const config = loadConfig();
     expect(config.apis[0].id).toBe("fx");
@@ -377,6 +388,13 @@ describe("config", () => {
     expect(config.apis[0].requestPrice).toBe(500n);
     expect(config.apis[0].upstreamTimeoutMs).toBe(1234);
     expect(config.apis[0].rateLimit).toEqual({ max: 25, timeWindowMs: 10_000 });
+    expect(config.apis[0].requestRewrite).toEqual({
+      headers: { "content-type": "application/json" },
+      body: {
+        mode: "mergeJson",
+        json: { key: "vendor-secret" }
+      }
+    });
     expect(config.apis[0].bearer).toBe("service-token");
     expect(config.apis[0].headers).toEqual({ "x-api-key": "service-key" });
     expect(config.apis[0].routes[0].path).toBe("/v1/live/*");

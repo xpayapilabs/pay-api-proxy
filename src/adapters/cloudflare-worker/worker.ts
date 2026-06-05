@@ -27,42 +27,65 @@ type ExecutionContextLike = {
 
 export default {
   async fetch(request: Request, env: CloudflareWorkerEnv, ctx: ExecutionContextLike): Promise<Response> {
-    const config = loadCloudflareWorkerConfig(env);
-    const storeHandle = createDurableObjectMppxStore(env.MPPX_STORE);
-    const auditStub = mppxStoreStub(env.MPPX_STORE);
-    const proxy = createPaidHttpProxy(config, {
-      storeHandle,
-      fetch: globalThis.fetch.bind(globalThis)
-    });
-
-    if (!proxy) {
+    try {
+      return await handleFetch(request, env, ctx);
+    } catch (error) {
+      console.error("pay-api-proxy Worker request failed", error);
       return Response.json({
         error: {
-          code: "no_enabled_apis",
-          message: "No enabled paid HTTP APIs are configured"
+          code: "worker_internal_error",
+          message: publicWorkerErrorMessage(error)
         }
-      }, { status: 503 });
+      }, { status: 500 });
     }
-
-    const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/admin/calls") {
-      return serveAuditQuery(request, env, auditStub);
-    }
-
-    const platformResponse = await servePlatformRoute(request, config, proxy);
-    if (platformResponse) return platformResponse;
-
-    const rateLimit = await enforceRateLimit(request, config, storeHandle.store);
-    if (rateLimit) return rateLimit;
-
-    const startedAt = Date.now();
-    const response = await proxy.fetch(request);
-    ctx.waitUntil(recordPaidCallSafely(auditStub, config, request, response, startedAt));
-    return response;
   }
 };
 
+async function handleFetch(request: Request, env: CloudflareWorkerEnv, ctx: ExecutionContextLike): Promise<Response> {
+  const config = loadCloudflareWorkerConfig(env);
+  if (!env.MPPX_STORE) {
+    throw new Error("MPPX_STORE Durable Object binding is missing; deploy with deployment_phase=normal after bootstrap migration");
+  }
+  const storeHandle = createDurableObjectMppxStore(env.MPPX_STORE);
+  const auditStub = mppxStoreStub(env.MPPX_STORE);
+  const proxy = createPaidHttpProxy(config, {
+    storeHandle,
+    fetch: globalThis.fetch.bind(globalThis)
+  });
+
+  if (!proxy) {
+    return Response.json({
+      error: {
+        code: "no_enabled_apis",
+        message: "No enabled paid HTTP APIs are configured"
+      }
+    }, { status: 503 });
+  }
+
+  const url = new URL(request.url);
+  if (request.method === "GET" && url.pathname === "/admin/calls") {
+    return serveAuditQuery(request, env, auditStub);
+  }
+
+  const platformResponse = await servePlatformRoute(request, config, proxy);
+  if (platformResponse) return platformResponse;
+
+  const rateLimit = await enforceRateLimit(request, config, storeHandle.store);
+  if (rateLimit) return rateLimit;
+
+  const startedAt = Date.now();
+  const response = await proxy.fetch(request);
+  ctx.waitUntil(recordPaidCallSafely(auditStub, config, request, response, startedAt));
+  return response;
+}
+
 export { MppxStoreDurableObject } from "./storage-durable-object.js";
+
+function publicWorkerErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : "Worker failed before handling the request";
+}
 
 async function servePlatformRoute(
   request: Request,

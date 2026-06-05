@@ -8,6 +8,7 @@ import type {
 } from "../../core/config.js";
 import { DEFAULT_APP_SETTINGS } from "../../core/default-config.js";
 import { parseJsoncObject } from "../../core/jsonc.js";
+import { parseRequestRewriteConfig } from "../../core/request-rewrite.js";
 
 export interface CloudflareWorkerConfigEnv {
   PAY_API_PROXY_CONFIG?: string;
@@ -18,6 +19,7 @@ export interface CloudflareWorkerConfigEnv {
   TEMPO_SETTLEMENT_ADDRESS?: string;
   TEMPO_ACCEPTED_ASSET?: string;
   TEMPO_ASSET_DECIMALS?: string;
+  [name: string]: unknown;
 }
 
 const API_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
@@ -67,7 +69,7 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
     },
     openaiBaseUrl: DEFAULT_APP_SETTINGS.openaiBaseUrl,
     openaiEndpointWhitelist: [...DEFAULT_APP_SETTINGS.openaiEndpointWhitelist],
-    apis: parseApis(fileConfig.apis, tempo.assetDecimals, tempo),
+    apis: parseApis(fileConfig.apis, tempo.assetDecimals, tempo, env),
     models: [],
     rateLimit: parseRateLimitConfig(fileConfig),
     tempo
@@ -136,12 +138,13 @@ function parseRateLimitConfig(fileConfig: Record<string, unknown>): RateLimitCon
 function parseApis(
   value: unknown,
   assetDecimals: number,
-  tempo: AppConfig["tempo"]
+  tempo: AppConfig["tempo"],
+  env: CloudflareWorkerConfigEnv
 ): TraditionalApiConfig[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("apis must be an array");
 
-  const apis = value.map((entry, index) => parseApi(entry, index, assetDecimals, tempo));
+  const apis = value.map((entry, index) => parseApi(entry, index, assetDecimals, tempo, env));
   const enabledIds = new Set<string>();
   for (const api of apis) {
     if (!API_ID_PATTERN.test(api.id)) {
@@ -158,7 +161,8 @@ function parseApi(
   entry: unknown,
   index: number,
   assetDecimals: number,
-  tempo: AppConfig["tempo"]
+  tempo: AppConfig["tempo"],
+  env: CloudflareWorkerConfigEnv
 ): TraditionalApiConfig {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     throw new Error(`apis[${index}] must be an object`);
@@ -186,6 +190,11 @@ function parseApi(
     forwardedHeaders: stringArrayField(api, "forwardedHeaders", DEFAULT_FORWARDED_HEADERS),
     upstreamTimeoutMs: positiveIntField(api, "upstreamTimeoutMs", 30_000),
     rateLimit: optionalRateLimit(api, `apis[${index}].rateLimit`),
+    requestRewrite: parseRequestRewriteConfig(
+      api.requestRewrite,
+      `apis[${index}].requestRewrite`,
+      (name) => optionalEnvString(env, name)
+    ),
     bearer: optionalStringField(api, "bearer"),
     headers: optionalHeaders(api, `apis[${index}].headers`)
   };
@@ -288,6 +297,11 @@ function optionalStringField(record: Record<string, unknown>, field: string): st
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length === 0) throw new Error(`${field} must be a string`);
   return value;
+}
+
+function optionalEnvString(env: CloudflareWorkerConfigEnv, name: string): string | undefined {
+  const value = env[name];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function requiredUrlField(record: Record<string, unknown>, field: string, name: string): string {
