@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Store } from "mppx/server";
+import { Json } from "ox";
 import type { MppxStoreHandle } from "../../ports/mppx-store.js";
 
 export function createSqliteMppxStore(databasePath: string): MppxStoreHandle {
@@ -22,32 +23,36 @@ export function createSqliteMppxStore(databasePath: string): MppxStoreHandle {
     )
   `);
 
-  const store = Store.cloudflare({
-    async get(key) {
+  const store = Store.from({
+    async get(key: string) {
       const row = db.prepare("SELECT value FROM mppx_store WHERE key = ?").get(key) as { value: string } | undefined;
-      return row?.value ?? null;
+      return row ? Json.parse(row.value) : null;
     },
-    async put(key, value) {
+    async put(key: string, value: unknown) {
       db.prepare(`
         INSERT INTO mppx_store (key, value)
         VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run(key, value);
+      `).run(key, Json.stringify(value));
     },
-    async delete(key) {
+    async delete(key: string) {
       db.prepare("DELETE FROM mppx_store WHERE key = ?").run(key);
     },
-    async update(key, fn) {
+    async update<result>(
+      key: string,
+      fn: (current: unknown | null) => Store.Change<unknown, result>
+    ): Promise<result> {
       db.exec("BEGIN IMMEDIATE");
       try {
         const row = db.prepare("SELECT value FROM mppx_store WHERE key = ?").get(key) as { value: string } | undefined;
-        const change = fn(row?.value ?? null);
+        const current = row ? Json.parse(row.value) : null;
+        const change = fn(current);
         if (change.op === "set") {
           db.prepare(`
             INSERT INTO mppx_store (key, value)
             VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value
-          `).run(key, change.value);
+          `).run(key, Json.stringify(change.value));
         } else if (change.op === "delete") {
           db.prepare("DELETE FROM mppx_store WHERE key = ?").run(key);
         }
