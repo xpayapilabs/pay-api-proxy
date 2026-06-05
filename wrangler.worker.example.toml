@@ -35,6 +35,10 @@ PAY_API_PROXY_CONFIG = """
 }
 """
 
+# MppxStoreDurableObject holds both the mppx payment store (channels/vouchers, KV API)
+# and the paid-call audit log (audit_calls SQLite table). Read the audit trail with:
+#   GET /admin/calls?since=<ISO>&apiId=<id>&reference=<tx>&limit=<n>
+#   Authorization: Bearer <MPP_SECRET_KEY>
 [[durable_objects.bindings]]
 name = "MPPX_STORE"
 class_name = "MppxStoreDurableObject"

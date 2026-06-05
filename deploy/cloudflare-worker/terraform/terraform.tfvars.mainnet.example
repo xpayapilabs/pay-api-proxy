@@ -1,0 +1,53 @@
+# Mainnet (real money) example. Copy to terraform.tfvars and fill in real values.
+#
+#   cp terraform.tfvars.mainnet.example terraform.tfvars
+#
+# Before applying for real money:
+#   1. Configure a remote, encrypted state backend (see versions.tf) — state holds secrets.
+#   2. First deploy is two phases:
+#        terraform apply -var='deployment_phase=bootstrap'
+#        terraform apply -var='deployment_phase=normal'
+#   3. export CLOUDFLARE_API_TOKEN=...   (Workers Scripts edit + Zone/DNS edit for the domain)
+
+cloudflare_account_id = "replace-with-cloudflare-account-id"
+cloudflare_zone_id    = "replace-with-zone-id"
+
+worker_name            = "pay-api-proxy-worker"
+custom_domain_hostname = "api.example.com"
+public_base_url        = "https://api.example.com"
+
+deployment_phase = "normal"
+
+mpp_secret_key           = "replace-with-strong-random-secret"
+tempo_settlement_address = "0xYOUR_MAINNET_WALLET_ADDRESS"
+
+# --- Tempo MAINNET ---
+# chainId 4217 makes the Worker run live (the adapter derives mppx.testnet=false from it).
+tempo_rpc_url        = "https://rpc.tempo.xyz"
+tempo_chain_id       = "4217"
+tempo_accepted_asset = "0x20C000000000000000000000b9537d11c60E8b50" # USDC on Tempo mainnet
+tempo_asset_decimals = "6"
+
+# Put upstream(s), per-route prices, upstream auth, and per-API rate limits here.
+# This value lands in Terraform state — keep state in a protected backend.
+pay_api_proxy_config = <<JSON
+{
+  "rateLimit": { "max": 120, "timeWindowMs": 60000 },
+  "apis": [
+    {
+      "id": "fx",
+      "upstreamBaseUrl": "https://upstream-fx.example.com",
+      "methods": ["GET", "POST"],
+      "pricing": { "request": "0.001" },
+      "routes": [
+        { "id": "quote",  "path": "/v1/quote",   "methods": ["GET"], "pricing": { "request": "0.001" } },
+        { "id": "live",   "path": "/v1/live/*",  "methods": ["GET"], "pricing": { "request": "0.002" } },
+        { "id": "status", "path": "/v1/status",  "methods": ["GET"], "pricing": { "request": "0" } }
+      ],
+      "rateLimit": { "max": 60, "timeWindowMs": 60000 },
+      "forwardedHeaders": ["accept", "content-type"],
+      "upstreamTimeoutMs": 30000
+    }
+  ]
+}
+JSON

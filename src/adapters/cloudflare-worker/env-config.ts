@@ -34,14 +34,14 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
     "publicBaseUrl",
     DEFAULT_APP_SETTINGS.publicBaseUrl
   )).replace(/\/+$/, "");
-  const mppx = parseMppxConfig(fileConfig, env);
+  const mppx = parseMppxConfig(fileConfig, env, tempo.chainId);
 
   return {
     nodeEnv,
     host: DEFAULT_APP_SETTINGS.host,
     port: DEFAULT_APP_SETTINGS.port,
     databasePath: ":worker:",
-    paymentProvider: "tempo-testnet",
+    paymentProvider: mppx.testnet ? "tempo-testnet" : "tempo-mainnet",
     publicBaseUrl,
     nodeSigningSecret: "",
     corsAllowOrigin: stringField(fileConfig, "corsAllowOrigin", DEFAULT_APP_SETTINGS.corsAllowOrigin),
@@ -74,15 +74,34 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
   };
 }
 
-function parseMppxConfig(fileConfig: Record<string, unknown>, env: CloudflareWorkerConfigEnv): MppxConfig {
+const TEMPO_MAINNET_CHAIN_ID = 4217;
+
+function parseMppxConfig(
+  fileConfig: Record<string, unknown>,
+  env: CloudflareWorkerConfigEnv,
+  chainId: number
+): MppxConfig {
   const configured = objectField(fileConfig, "mppx", {});
   const secretKey = env.MPP_SECRET_KEY ?? stringField(configured, "secretKey", "");
   if (!secretKey) {
     throw new Error("MPP_SECRET_KEY or PAY_API_PROXY_CONFIG.mppx.secretKey is required");
   }
+  // Derive the network from the chain id (mainnet 4217 -> live, anything else -> testnet)
+  // so operators only set the chain once. An explicit `mppx.testnet` still wins, but warn
+  // when it contradicts the configured chain to catch "mainnet chain but testnet flag" mistakes.
+  const derivedTestnet = chainId !== TEMPO_MAINNET_CHAIN_ID;
+  const explicitTestnet = configured.testnet === undefined
+    ? undefined
+    : booleanField(configured, "testnet", true);
+  if (explicitTestnet !== undefined && explicitTestnet !== derivedTestnet) {
+    console.warn(
+      `pay-api-proxy: mppx.testnet=${explicitTestnet} contradicts chainId=${chainId} ` +
+      `(${derivedTestnet ? "a testnet" : "the mainnet"} chain). Using the explicit value.`
+    );
+  }
   return {
     secretKey,
-    testnet: booleanField(configured, "testnet", true),
+    testnet: explicitTestnet ?? derivedTestnet,
     waitForConfirmation: booleanField(configured, "waitForConfirmation", true)
   };
 }
