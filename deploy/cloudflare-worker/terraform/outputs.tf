@@ -27,3 +27,13 @@ output "deployment_phase" {
   description = "Current deployment phase."
   value       = var.deployment_phase
 }
+
+output "network" {
+  description = "Selected Tempo network preset."
+  value       = var.network
+}
+
+output "tempo_chain_id" {
+  description = "Resolved Tempo chain id the Worker will use (4217 = mainnet)."
+  value       = local.tempo_chain_id
+}

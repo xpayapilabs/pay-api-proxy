@@ -50,7 +50,20 @@ Workers Observability is enabled by default. Tune sampling or persistence with t
 
 `custom_domain_hostname` is hostname-only, for example `api.example.com`. Keep the scheme in `public_base_url`, for example `https://api.example.com`.
 
-**Network:** the testnet example uses Tempo Moderato (`tempo_chain_id = "42431"`). The mainnet example uses `tempo_chain_id = "4217"` with the mainnet RPC and USDC asset — the Worker derives `mppx.testnet=false` from the mainnet chain id automatically, so you only set the chain in one place.
+**Switching network is one knob — `network`:**
+
+```hcl
+network = "testnet"   # default: Tempo Moderato (pathUSD)
+network = "mainnet"   # live: Tempo mainnet RPC + chain 4217 + USDC, all set for you
+```
+
+`network` selects the RPC URL, chain id, accepted asset, and decimals in one place; the Worker then derives `mppx.testnet=false` from chain id 4217 automatically. You can still override any single value with a `tempo_*` var. To flip an existing deploy to mainnet without editing files:
+
+```bash
+terraform apply -var='network=mainnet' -var='deployment_phase=normal'
+```
+
+`terraform output network` and `terraform output tempo_chain_id` confirm what you deployed.
 
 ## Local Private Files
 

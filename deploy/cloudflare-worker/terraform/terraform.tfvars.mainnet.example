@@ -21,12 +21,10 @@ deployment_phase = "normal"
 mpp_secret_key           = "replace-with-strong-random-secret"
 tempo_settlement_address = "0xYOUR_MAINNET_WALLET_ADDRESS"
 
-# --- Tempo MAINNET ---
-# chainId 4217 makes the Worker run live (the adapter derives mppx.testnet=false from it).
-tempo_rpc_url        = "https://rpc.tempo.xyz"
-tempo_chain_id       = "4217"
-tempo_accepted_asset = "0x20C000000000000000000000b9537d11c60E8b50" # USDC on Tempo mainnet
-tempo_asset_decimals = "6"
+# --- Network: one knob ---
+# "mainnet" sets the live RPC, chain id 4217, and USDC automatically; the Worker derives
+# mppx.testnet=false from chain id 4217. To override a single value, set a tempo_* var.
+network = "mainnet"
 
 # Put upstream(s), per-route prices, upstream auth, and per-API rate limits here.
 # This value lands in Terraform state — keep state in a protected backend.

@@ -2,6 +2,29 @@ locals {
   durable_object_class_name = "MppxStoreDurableObject"
   worker_bundle_path        = var.worker_bundle_path != null ? var.worker_bundle_path : abspath("${path.module}/../../../dist/cloudflare-worker/worker.js")
 
+  # One knob: var.network picks the whole Tempo chain preset. Individual tempo_* vars
+  # still override when set. The Worker derives mppx.testnet from the chain id (4217 = live).
+  network_presets = {
+    testnet = {
+      rpc_url        = "https://rpc.moderato.tempo.xyz"
+      chain_id       = "42431"
+      accepted_asset = "0x20c0000000000000000000000000000000000000"
+      asset_decimals = "6"
+    }
+    mainnet = {
+      rpc_url        = "https://rpc.tempo.xyz"
+      chain_id       = "4217"
+      accepted_asset = "0x20C000000000000000000000b9537d11c60E8b50" # USDC on Tempo mainnet
+      asset_decimals = "6"
+    }
+  }
+  network_preset = local.network_presets[var.network]
+
+  tempo_rpc_url        = coalesce(var.tempo_rpc_url, local.network_preset.rpc_url)
+  tempo_chain_id       = coalesce(var.tempo_chain_id, local.network_preset.chain_id)
+  tempo_accepted_asset = coalesce(var.tempo_accepted_asset, local.network_preset.accepted_asset)
+  tempo_asset_decimals = coalesce(var.tempo_asset_decimals, local.network_preset.asset_decimals)
+
   json_bindings = [
     {
       name        = "PUBLIC_BASE_URL"
@@ -13,14 +36,14 @@ locals {
     {
       name        = "TEMPO_RPC_URL"
       type        = "json"
-      json        = jsonencode(var.tempo_rpc_url)
+      json        = jsonencode(local.tempo_rpc_url)
       class_name  = null
       script_name = null
     },
     {
       name        = "TEMPO_CHAIN_ID"
       type        = "json"
-      json        = jsonencode(var.tempo_chain_id)
+      json        = jsonencode(local.tempo_chain_id)
       class_name  = null
       script_name = null
     },
@@ -34,14 +57,14 @@ locals {
     {
       name        = "TEMPO_ACCEPTED_ASSET"
       type        = "json"
-      json        = jsonencode(var.tempo_accepted_asset)
+      json        = jsonencode(local.tempo_accepted_asset)
       class_name  = null
       script_name = null
     },
     {
       name        = "TEMPO_ASSET_DECIMALS"
       type        = "json"
-      json        = jsonencode(var.tempo_asset_decimals)
+      json        = jsonencode(local.tempo_asset_decimals)
       class_name  = null
       script_name = null
     }

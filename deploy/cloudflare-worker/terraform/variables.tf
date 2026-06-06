@@ -186,16 +186,27 @@ variable "mpp_secret_key" {
   sensitive   = true
 }
 
-variable "tempo_rpc_url" {
-  description = "Tempo RPC URL."
+variable "network" {
+  description = "Tempo network preset. Sets RPC URL, chain id, accepted asset, and decimals in one place. Use \"mainnet\" to deploy for real money. Override any individual tempo_* var below to customize."
   type        = string
-  default     = "https://rpc.moderato.tempo.xyz"
+  default     = "testnet"
+
+  validation {
+    condition     = contains(["testnet", "mainnet"], var.network)
+    error_message = "network must be either testnet or mainnet."
+  }
+}
+
+variable "tempo_rpc_url" {
+  description = "Override the network preset's Tempo RPC URL. Leave null to use the preset for var.network."
+  type        = string
+  default     = null
 }
 
 variable "tempo_chain_id" {
-  description = "Tempo chain ID."
+  description = "Override the network preset's Tempo chain ID. Leave null to use the preset for var.network."
   type        = string
-  default     = "42431"
+  default     = null
 }
 
 variable "tempo_settlement_address" {
@@ -204,15 +215,15 @@ variable "tempo_settlement_address" {
 }
 
 variable "tempo_accepted_asset" {
-  description = "Accepted Tempo asset address."
+  description = "Override the network preset's accepted Tempo asset address. Leave null to use the preset for var.network."
   type        = string
-  default     = "0x20c0000000000000000000000000000000000000"
+  default     = null
 }
 
 variable "tempo_asset_decimals" {
-  description = "Accepted asset decimals."
+  description = "Override the network preset's accepted asset decimals. Leave null to use the preset for var.network."
   type        = string
-  default     = "6"
+  default     = null
 }
 
 variable "worker_tags" {
