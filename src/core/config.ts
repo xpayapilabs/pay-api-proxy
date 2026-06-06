@@ -6,6 +6,10 @@ import { DEFAULT_APP_SETTINGS } from "./default-config.js";
 import { parseJsoncObject } from "./jsonc.js";
 import { DEFAULT_MODELS, type ModelConfig } from "./models.js";
 import { parseRequestRewriteConfig, type RequestRewriteConfig } from "./request-rewrite.js";
+import {
+  DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS,
+  type ResponseSanitizerConfig
+} from "./response-sanitizer.js";
 
 export type PaymentProviderName = "tempo-testnet" | "tempo-mainnet";
 export type UpstreamProviderName = "http" | "openai";
@@ -98,6 +102,7 @@ export interface TraditionalApiConfig {
   upstreamTimeoutMs: number;
   rateLimit?: TraditionalApiRateLimitConfig;
   requestRewrite?: RequestRewriteConfig;
+  responseSanitizer?: ResponseSanitizerConfig;
   bearer?: string;
   headers?: Record<string, string>;
 }
@@ -811,6 +816,23 @@ function parseTraditionalApiConfig(
       ...(timeWindowMs !== undefined ? { timeWindowMs } : {})
     };
   };
+  const responseSanitizerValue = (): ResponseSanitizerConfig => {
+    const value = api.responseSanitizer;
+    if (value === undefined) {
+      return { removeJsonKeys: [...DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS] };
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${collectionName}[${index}].responseSanitizer must be an object`);
+    }
+    return {
+      removeJsonKeys: jsonKeyArrayValue(
+        value as Record<string, unknown>,
+        "removeJsonKeys",
+        `${collectionName}[${index}].responseSanitizer.removeJsonKeys`,
+        [...DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS]
+      )
+    };
+  };
 
   const upstreamBaseUrlFromEnv = optionalEnv("UPSTREAM_BASE_URL");
   const upstreamBaseUrl = normalizeUpstreamBaseUrl(upstreamBaseUrlFromEnv ?? stringValue("upstreamBaseUrl"));
@@ -861,9 +883,29 @@ function parseTraditionalApiConfig(
       `${collectionName}[${index}].requestRewrite`,
       optionalEnv
     ),
+    responseSanitizer: responseSanitizerValue(),
     bearer: optionalStringValueFrom(api, `${collectionName}[${index}].bearer`, "bearer") ?? optionalEnv("UPSTREAM_BEARER_TOKEN"),
     headers: headersValue(api, `${collectionName}[${index}].headers`) ?? upstreamHeaderFromEnv()
   };
+}
+
+function jsonKeyArrayValue(
+  record: Record<string, unknown>,
+  fieldName: string,
+  errorName: string,
+  fallback: string[]
+): string[] {
+  const value = record[fieldName];
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value)) {
+    throw new Error(`${errorName} must be an array of JSON key names`);
+  }
+  return [...new Set(value.map((entry) => {
+    if (typeof entry !== "string" || entry.length === 0) {
+      throw new Error(`${errorName} entries must be non-empty strings`);
+    }
+    return entry;
+  }))];
 }
 
 /**

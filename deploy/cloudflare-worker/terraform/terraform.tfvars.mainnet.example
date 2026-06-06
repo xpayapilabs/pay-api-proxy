@@ -45,6 +45,7 @@ pay_api_proxy_config = <<JSON
         { "id": "status", "path": "/v1/status",  "methods": ["GET"], "pricing": { "request": "0" } }
       ],
       "rateLimit": { "max": 60, "timeWindowMs": 60000 },
+      "responseSanitizer": { "removeJsonKeys": ["cost", "remain_money"] },
       "forwardedHeaders": ["accept", "content-type"],
       "upstreamTimeoutMs": 30000
     }

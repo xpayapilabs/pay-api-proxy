@@ -50,6 +50,8 @@
   //   routes          optional  per-route price + method + bearer/header overrides
   //   rateLimit       optional  per-IP limit for this upstream API
   //                             ({ "max": 120, "timeWindowMs": 60000 })
+  //   responseSanitizer optional removes JSON keys from upstream responses
+  //                             (default: ["cost","remain_money"])
   //   bearer          optional  injected as `Authorization: Bearer …` upstream
   //   headers         optional  arbitrary headers injected on every upstream call
   //   upstreamTimeoutMs optional upstream deadline in milliseconds (default 30000)
@@ -68,6 +70,7 @@
       "pricing": { "request": "0.0005" },                  // default $0.0005 per call
       "methods": ["GET", "POST"],
       "rateLimit": { "max": 120, "timeWindowMs": 60000 },
+      "responseSanitizer": { "removeJsonKeys": ["cost", "remain_money"] },
 
       // Operator-side auth injected on every upstream call. Pick whichever the
       // upstream expects:

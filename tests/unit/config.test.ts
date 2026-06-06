@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach } from "vitest";
+import { loadCloudflareWorkerConfig } from "../../src/adapters/cloudflare-worker/env-config.js";
 import { DEV_SIGNING_SECRET, loadConfig, loadWorkerConfig } from "../../src/core/config.js";
 
 const SAVED_KEYS = [
@@ -359,6 +360,7 @@ describe("config", () => {
               }
             }
           },
+          responseSanitizer: { removeJsonKeys: ["cost", "remain_money", "vendor_balance"] },
           bearer: "service-token",
           headers: { "x-api-key": "service-key" },
           routes: [
@@ -394,6 +396,9 @@ describe("config", () => {
         mode: "mergeJson",
         json: { key: "vendor-secret" }
       }
+    });
+    expect(config.apis[0].responseSanitizer).toEqual({
+      removeJsonKeys: ["cost", "remain_money", "vendor_balance"]
     });
     expect(config.apis[0].bearer).toBe("service-token");
     expect(config.apis[0].headers).toEqual({ "x-api-key": "service-key" });
@@ -451,8 +456,50 @@ describe("config", () => {
     expect(config.apis[0].routes[0].requestPrice).toBe(2_500n);
     expect(config.apis[0].methods).toEqual(["GET", "POST", "PUT", "PATCH", "DELETE"]);
     expect(config.apis[0].upstreamTimeoutMs).toBe(30_000);
+    expect(config.apis[0].responseSanitizer).toEqual({ removeJsonKeys: ["cost", "remain_money"] });
 
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rejects invalid traditional API response sanitizer configuration", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-response-sanitizer-invalid-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        apis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" },
+          responseSanitizer: { removeJsonKeys: ["cost", 123] }
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    expect(() => loadConfig()).toThrow(/responseSanitizer\.removeJsonKeys/);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("loads Cloudflare Worker response sanitizer configuration", () => {
+    const config = loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_CONFIG: JSON.stringify({
+        apis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" },
+          responseSanitizer: { removeJsonKeys: ["cost", "remain_money", "quota"] }
+        }]
+      })
+    });
+
+    expect(config.apis[0].responseSanitizer).toEqual({
+      removeJsonKeys: ["cost", "remain_money", "quota"]
+    });
   });
 
   it("loads partial per-upstream rate limit configuration", () => {

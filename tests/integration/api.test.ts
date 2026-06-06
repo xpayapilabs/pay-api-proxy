@@ -76,6 +76,24 @@ async function startTraditionalUpstream(label = "upstream"): Promise<{ baseUrl: 
   };
 }
 
+async function startJsonUpstream(body: unknown): Promise<{ baseUrl: string; close(): Promise<void> }> {
+  const server: Server = createServer((_request, response) => {
+    response.setHeader("content-type", "application/json; charset=utf-8");
+    response.end(JSON.stringify(body));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test upstream did not bind to a TCP port");
+
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    })
+  };
+}
+
 async function startOpenApiDocumentServer(document: Record<string, unknown>): Promise<{ url: string; close(): Promise<void> }> {
   const server: Server = createServer((_request, response) => {
     response.setHeader("cache-control", "public, max-age=60");
@@ -391,6 +409,51 @@ describe("API integration", () => {
     expect(verify.json().body).toEqual({ key: "vendor-key", verifycode: "123456" });
     expect(resend.statusCode).toBe(200);
     expect(resend.json().body).toEqual({ key: "vendor-key", verifycode: "654321" });
+
+    await harness.close();
+    await upstream.close();
+  });
+
+  it("sanitizes configured keys from upstream JSON responses", async () => {
+    const upstream = await startJsonUpstream({
+      ok: true,
+      cost: 1,
+      remain_money: 2,
+      vendor_balance: 3,
+      nested: {
+        cost: 4,
+        value: "kept"
+      }
+    });
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      apis: [{
+        id: "metrics",
+        upstreamBaseUrl: upstream.baseUrl,
+        enabled: true,
+        methods: ["GET"],
+        requestPrice: 0n,
+        routes: [{ id: "snapshot", path: "/v1/snapshot", methods: ["GET"], requestPrice: 0n }],
+        allowUnmatchedRoutes: false,
+        forwardedHeaders: ["accept"],
+        upstreamTimeoutMs: 30_000,
+        responseSanitizer: { removeJsonKeys: ["cost", "remain_money", "vendor_balance"] },
+        assetSymbol: "pathUSD",
+        assetAddress: "0x20c0000000000000000000000000000000000000",
+        chainId: 42431
+      }]
+    });
+
+    const response = await harness.app.inject({ method: "GET", url: "/v1/snapshot" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("application/json");
+    expect(response.json()).toEqual({
+      ok: true,
+      nested: {
+        value: "kept"
+      }
+    });
 
     await harness.close();
     await upstream.close();

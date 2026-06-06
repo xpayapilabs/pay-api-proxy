@@ -9,6 +9,7 @@ import type {
 import { DEFAULT_APP_SETTINGS } from "../../core/default-config.js";
 import { parseJsoncObject } from "../../core/jsonc.js";
 import { parseRequestRewriteConfig } from "../../core/request-rewrite.js";
+import { DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS } from "../../core/response-sanitizer.js";
 
 export interface CloudflareWorkerConfigEnv {
   PAY_API_PROXY_CONFIG?: string;
@@ -195,6 +196,7 @@ function parseApi(
       `apis[${index}].requestRewrite`,
       (name) => optionalEnvString(env, name)
     ),
+    responseSanitizer: responseSanitizer(api, `apis[${index}].responseSanitizer`),
     bearer: optionalStringField(api, "bearer"),
     headers: optionalHeaders(api, `apis[${index}].headers`)
   };
@@ -270,6 +272,35 @@ function optionalRateLimit(record: Record<string, unknown>, name: string): Tradi
     ...(max !== undefined ? { max } : {}),
     ...(timeWindowMs !== undefined ? { timeWindowMs } : {})
   };
+}
+
+function responseSanitizer(record: Record<string, unknown>, name: string): TraditionalApiConfig["responseSanitizer"] {
+  const value = record.responseSanitizer;
+  if (value === undefined) return { removeJsonKeys: [...DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${name} must be an object`);
+  return {
+    removeJsonKeys: jsonKeyArrayField(
+      value as Record<string, unknown>,
+      "removeJsonKeys",
+      `${name}.removeJsonKeys`,
+      [...DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS]
+    )
+  };
+}
+
+function jsonKeyArrayField(
+  record: Record<string, unknown>,
+  field: string,
+  name: string,
+  fallback: string[]
+): string[] {
+  const value = record[field];
+  if (value === undefined) return [...fallback];
+  if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
+  return [...new Set(value.map((entry) => {
+    if (typeof entry !== "string" || entry.length === 0) throw new Error(`${name} entries must be strings`);
+    return entry;
+  }))];
 }
 
 function objectField(record: Record<string, unknown>, field: string, fallback: Record<string, unknown>): Record<string, unknown> {
