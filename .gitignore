@@ -8,5 +8,6 @@ coverage/
 data/
 .claude/*
 tests/unit/test-mppx-image.jsonc
+tests/fixtures/local-paid-api.fixture.jsonc
 scripts/analyze-onchain-wallets.jsonc
 .env.backup

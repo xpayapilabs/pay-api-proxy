@@ -1,0 +1,16 @@
+{
+  // Local private endpoint details can live in local-paid-api.fixture.jsonc.
+  // That file is ignored by git; this example stays safe for open source.
+  "apiId": "sample-api",
+  "routeId": "sample-route",
+  "routePath": "/v1/example",
+  "method": "POST",
+  "publicBaseUrl": "https://api.example.com",
+  "upstreamBaseUrl": "https://upstream.example.com",
+  "defaultRequestPrice": "500",
+  "routeRequestPrice": "25000",
+  "assetSymbol": "pathUSD",
+  "assetAddress": "0x20c0000000000000000000000000000000000000",
+  "assetDecimals": 6,
+  "chainId": 42431
+}

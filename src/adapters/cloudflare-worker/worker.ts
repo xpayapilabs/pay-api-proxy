@@ -1,5 +1,5 @@
 import type { Store } from "mppx/server";
-import { parseRefundStatus } from "../../core/audit.js";
+import { parseRefundStatus, type PaidCallRefundUpdate } from "../../core/audit.js";
 import { createPaidHttpProxy, type PaidHttpProxy } from "../../core/paid-http/proxy.js";
 import { buildPricingPayload } from "../../core/pricing.js";
 import { consumeAtomicRateLimit, isRateLimitExempt, rateLimitForRequest } from "../../core/rate-limit.js";
@@ -9,7 +9,7 @@ import {
   type DurableObjectNamespaceLike,
   type DurableObjectStubLike
 } from "./storage-durable-object.js";
-import { queryPaidCalls, recordPaidCall } from "./audit-log.js";
+import { queryPaidCalls, recordPaidCall, updatePaidCallRefund } from "./audit-log.js";
 import { loadCloudflareWorkerConfig, type CloudflareWorkerConfigEnv } from "./env-config.js";
 
 export interface CloudflareWorkerEnv extends CloudflareWorkerConfigEnv {
@@ -67,6 +67,10 @@ async function handleFetch(request: Request, env: CloudflareWorkerEnv, ctx: Exec
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/admin/calls") {
     return serveAuditQuery(request, env, auditStub);
+  }
+  const auditRefundMatch = /^\/admin\/calls\/([^/]+)\/refund$/.exec(url.pathname);
+  if (request.method === "PATCH" && auditRefundMatch) {
+    return serveAuditRefundUpdate(request, env, auditStub, decodeURIComponent(auditRefundMatch[1]!));
   }
 
   const platformResponse = await servePlatformRoute(request, config, proxy);
@@ -179,6 +183,63 @@ async function serveAuditQuery(
     limit: parseAuditLimit(url.searchParams.get("limit"))
   });
   return Response.json({ calls });
+}
+
+async function serveAuditRefundUpdate(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  stub: DurableObjectStubLike,
+  id: string
+): Promise<Response> {
+  if (!isAuthorizedAdmin(request, env)) {
+    return Response.json({
+      error: {
+        code: "unauthorized",
+        message: "PATCH /admin/calls/:id/refund requires Authorization: Bearer <MPP_SECRET_KEY>"
+      }
+    }, { status: 401, headers: { "www-authenticate": "Bearer" } });
+  }
+
+  const update = parseRefundUpdate(await request.json().catch(() => undefined));
+  if (!update) {
+    return Response.json({
+      error: {
+        code: "invalid_refund_update",
+        message: "Body must include refundStatus as pending, refunded, or rejected."
+      }
+    }, { status: 400 });
+  }
+
+  const call = await updatePaidCallRefund(stub, id, update);
+  if (!call) {
+    return Response.json({
+      error: {
+        code: "audit_call_not_found",
+        message: "No audit call exists with that id."
+      }
+    }, { status: 404 });
+  }
+  return Response.json({ call });
+}
+
+function parseRefundUpdate(body: unknown): PaidCallRefundUpdate | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const record = body as Record<string, unknown>;
+  const refundStatus = parseRefundStatus(stringField(record.refundStatus));
+  if (!refundStatus || refundStatus === "not_applicable") return undefined;
+  const refundedAt = stringField(record.refundedAt) ??
+    (refundStatus === "refunded" ? new Date().toISOString() : undefined);
+  return {
+    refundStatus,
+    refundReason: stringField(record.refundReason),
+    refundReference: stringField(record.refundReference),
+    refundedAt,
+    refundNote: stringField(record.refundNote)
+  };
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function isAuthorizedAdmin(request: Request, env: CloudflareWorkerEnv): boolean {

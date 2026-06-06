@@ -139,6 +139,9 @@ export function migrate(db: DatabaseSync): void {
       chain_id INTEGER,
       refund_status TEXT NOT NULL DEFAULT 'not_applicable',
       refund_reason TEXT,
+      refund_reference TEXT,
+      refunded_at TEXT,
+      refund_note TEXT,
       duration_ms INTEGER
     );
 
@@ -175,6 +178,9 @@ function migrateAuditCalls(db: DatabaseSync): void {
   ensureColumn(db, columns, "chain_id", "chain_id INTEGER");
   ensureColumn(db, columns, "refund_status", "refund_status TEXT NOT NULL DEFAULT 'not_applicable'");
   ensureColumn(db, columns, "refund_reason", "refund_reason TEXT");
+  ensureColumn(db, columns, "refund_reference", "refund_reference TEXT");
+  ensureColumn(db, columns, "refunded_at", "refunded_at TEXT");
+  ensureColumn(db, columns, "refund_note", "refund_note TEXT");
 }
 
 function ensureColumn(

@@ -1,4 +1,4 @@
-import type { PaidCallAudit, PaidCallQuery } from "../../core/audit.js";
+import type { PaidCallAudit, PaidCallQuery, PaidCallRefundUpdate } from "../../core/audit.js";
 import type { DurableObjectStubLike } from "./storage-durable-object.js";
 
 /**
@@ -37,4 +37,19 @@ export async function queryPaidCalls(
   const response = await stub.fetch(`${AUDIT_ORIGIN}/audit?${params.toString()}`);
   if (!response.ok) throw new Error(`audit query failed: ${response.status}`);
   return await response.json() as PaidCallAudit[];
+}
+
+export async function updatePaidCallRefund(
+  stub: DurableObjectStubLike,
+  id: string,
+  update: PaidCallRefundUpdate
+): Promise<PaidCallAudit | undefined> {
+  const response = await stub.fetch(`${AUDIT_ORIGIN}/audit/${encodeURIComponent(id)}/refund`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(update)
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`audit refund update failed: ${response.status}`);
+  return await response.json() as PaidCallAudit;
 }

@@ -12,6 +12,7 @@ import { TestPaymentProvider } from "../helpers/test-payment-provider.js";
 import { encodePaymentCredential } from "../../src/payments/credential.js";
 import { TestAiProvider } from "../helpers/test-ai-provider.js";
 import type { AiProvider } from "../../src/providers/types.js";
+import { loadLocalPaidApiFixture } from "../helpers/local-paid-api-fixture.js";
 
 function buildHarness(overrides: Parameters<typeof testConfig>[0] = {}, aiProvider: AiProvider = new TestAiProvider()) {
   const config = testConfig(overrides);
@@ -231,6 +232,118 @@ describe("API integration", () => {
 
     await harness.close();
     await upstream.close();
+  });
+
+  it("exposes refund-grade paid call audits through the admin endpoint", async () => {
+    const paidApi = loadLocalPaidApiFixture();
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      apis: [{
+        id: paidApi.apiId,
+        upstreamBaseUrl: paidApi.upstreamBaseUrl,
+        enabled: true,
+        methods: [paidApi.method],
+        requestPrice: paidApi.defaultRequestPrice,
+        routes: [
+          {
+            id: paidApi.routeId,
+            path: paidApi.routePath,
+            methods: [paidApi.method],
+            requestPrice: paidApi.routeRequestPrice
+          }
+        ],
+        forwardedHeaders: ["content-type"],
+        upstreamTimeoutMs: 30_000,
+        assetSymbol: paidApi.assetSymbol,
+        assetAddress: paidApi.assetAddress,
+        chainId: paidApi.chainId
+      }]
+    });
+    harness.repository.recordPaidCallAudit({
+      id: "audit_refund_candidate",
+      createdAt: "2026-06-06T12:00:00.000Z",
+      completedAt: "2026-06-06T12:00:00.430Z",
+      apiId: paidApi.apiId,
+      routeId: paidApi.routeId,
+      method: paidApi.method,
+      path: paidApi.routePath,
+      upstreamPath: paidApi.routePath,
+      status: 500,
+      paid: true,
+      paymentVerified: true,
+      receiptAttached: false,
+      paymentMethod: "tempo",
+      paymentReference: `0x${"3".repeat(64)}`,
+      externalId: paidApi.externalId,
+      receiptTimestamp: "2026-06-06T11:59:59.000Z",
+      paymentVerifiedAt: "2026-06-06T11:59:59.500Z",
+      requestPrice: paidApi.routeRequestPriceText,
+      assetSymbol: paidApi.assetSymbol,
+      assetAddress: paidApi.assetAddress,
+      assetDecimals: paidApi.assetDecimals,
+      chainId: paidApi.chainId,
+      refundStatus: "pending",
+      refundReason: "paid_response_500",
+      durationMs: 430
+    });
+
+    const unauthorized = await harness.app.inject({ method: "GET", url: "/admin/calls" });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const pending = await harness.app.inject({
+      method: "GET",
+      url: "/admin/calls?refundStatus=pending",
+      headers: { authorization: `Bearer ${harness.config.mppx.secretKey}` }
+    });
+
+    expect(pending.statusCode).toBe(200);
+    expect(pending.json().calls).toEqual([
+      expect.objectContaining({
+        id: "audit_refund_candidate",
+        apiId: paidApi.apiId,
+        routeId: paidApi.routeId,
+        status: 500,
+        paid: true,
+        paymentVerified: true,
+        receiptAttached: false,
+        paymentReference: `0x${"3".repeat(64)}`,
+        requestPrice: paidApi.routeRequestPriceText,
+        refundStatus: "pending",
+        refundReason: "paid_response_500"
+      })
+    ]);
+
+    const updated = await harness.app.inject({
+      method: "PATCH",
+      url: "/admin/calls/audit_refund_candidate/refund",
+      headers: { authorization: `Bearer ${harness.config.mppx.secretKey}` },
+      payload: {
+        refundStatus: "refunded",
+        refundReference: `0x${"4".repeat(64)}`,
+        refundReason: "manual_refund_sent",
+        refundNote: "Refunded after upstream 500."
+      }
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().call).toMatchObject({
+      id: "audit_refund_candidate",
+      refundStatus: "refunded",
+      refundReference: `0x${"4".repeat(64)}`,
+      refundReason: "manual_refund_sent",
+      refundNote: "Refunded after upstream 500."
+    });
+    expect(updated.json().call.refundedAt).toEqual(expect.any(String));
+
+    const noPending = await harness.app.inject({
+      method: "GET",
+      url: "/admin/calls?refundStatus=pending",
+      headers: { authorization: `Bearer ${harness.config.mppx.secretKey}` }
+    });
+    expect(noPending.statusCode).toBe(200);
+    expect(noPending.json().calls).toEqual([]);
+
+    await harness.close();
   });
 
   it("applies upstream-level request rewrite to every traditional API route", async () => {

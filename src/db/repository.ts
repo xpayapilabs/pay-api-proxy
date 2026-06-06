@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { PaidCallAudit, PaidCallQuery } from "../core/audit.js";
+import type { PaidCallAudit, PaidCallQuery, PaidCallRefundUpdate } from "../core/audit.js";
 
 export interface RequestRecord {
   id: string;
@@ -485,8 +485,8 @@ export class Repository {
         status, paid, payment_verified, receipt_attached,
         payment_method, payment_reference, external_id, receipt_timestamp, payment_verified_at,
         request_price, asset_symbol, asset_address, asset_decimals, chain_id,
-        refund_status, refund_reason, duration_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        refund_status, refund_reason, refund_reference, refunded_at, refund_note, duration_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       record.id,
       record.createdAt,
@@ -512,8 +512,39 @@ export class Repository {
       record.chainId ?? null,
       record.refundStatus,
       record.refundReason ?? null,
+      record.refundReference ?? null,
+      record.refundedAt ?? null,
+      record.refundNote ?? null,
       record.durationMs ?? null
     );
+  }
+
+  updatePaidCallRefund(id: string, update: PaidCallRefundUpdate): PaidCallAudit | undefined {
+    const result = this.db.prepare(`
+      UPDATE audit_calls
+      SET refund_status = ?,
+          refund_reason = ?,
+          refund_reference = ?,
+          refunded_at = ?,
+          refund_note = ?
+      WHERE id = ?
+    `).run(
+      update.refundStatus,
+      update.refundReason ?? null,
+      update.refundReference ?? null,
+      update.refundedAt ?? null,
+      update.refundNote ?? null,
+      id
+    );
+    if (Number(result.changes ?? 0) === 0) return undefined;
+    return this.getPaidCallAudit(id);
+  }
+
+  getPaidCallAudit(id: string): PaidCallAudit | undefined {
+    const row = this.db.prepare("SELECT * FROM audit_calls WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    return row ? mapPaidCallAudit(row) : undefined;
   }
 
   listPaidCallAudits(query: PaidCallQuery = {}): PaidCallAudit[] {
@@ -652,6 +683,9 @@ function mapPaidCallAudit(row: Record<string, unknown>): PaidCallAudit {
     chainId: row.chain_id === null || row.chain_id === undefined ? undefined : Number(row.chain_id),
     refundStatus: String(row.refund_status) as PaidCallAudit["refundStatus"],
     refundReason: asString(row.refund_reason),
+    refundReference: asString(row.refund_reference),
+    refundedAt: asString(row.refunded_at),
+    refundNote: asString(row.refund_note),
     durationMs: row.duration_ms === null || row.duration_ms === undefined ? undefined : Number(row.duration_ms)
   };
 }

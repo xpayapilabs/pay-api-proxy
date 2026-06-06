@@ -25,6 +25,9 @@ export interface PaidCallAudit {
   chainId?: number;
   refundStatus: RefundStatus;
   refundReason?: string;
+  refundReference?: string;
+  refundedAt?: string;
+  refundNote?: string;
   durationMs?: number;
 }
 
@@ -43,6 +46,14 @@ export interface PaidCallQuery {
 
 export interface PaidCallAuditSink {
   record(audit: PaidCallAudit): Promise<void> | void;
+}
+
+export interface PaidCallRefundUpdate {
+  refundStatus: RefundStatus;
+  refundReason?: string;
+  refundReference?: string;
+  refundedAt?: string;
+  refundNote?: string;
 }
 
 export function refundStatusForPaidCall(params: { paid: boolean; status: number }): {

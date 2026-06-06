@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { nanoid } from "nanoid";
 import type { PriceQuote } from "../charging/types.js";
-import { parseRefundStatus } from "../core/audit.js";
+import { parseRefundStatus, type PaidCallRefundUpdate } from "../core/audit.js";
 import type { AppConfig, OpenAiCompatibleEndpoint } from "../core/config.js";
 import { parseAmount } from "../core/money.js";
 import type { PaymentReservationRecord, Repository } from "../db/repository.js";
@@ -143,6 +143,44 @@ export function buildApp(deps: AppDeps) {
         limit: parseAuditLimit(stringQuery(query.limit))
       })
     };
+  });
+
+  app.patch("/admin/calls/:id/refund", async (request, reply) => {
+    if (!isAuthorizedAdmin(request, deps.config.mppx.secretKey)) {
+      reply.header("www-authenticate", "Bearer");
+      reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "PATCH /admin/calls/:id/refund requires Authorization: Bearer <MPP_SECRET_KEY>"
+        }
+      });
+      return;
+    }
+
+    const { id } = request.params as { id: string };
+    const update = parseRefundUpdate(request.body);
+    if (!update) {
+      reply.status(400).send({
+        error: {
+          code: "invalid_refund_update",
+          message: "Body must include refundStatus as pending, refunded, or rejected."
+        }
+      });
+      return;
+    }
+
+    const call = deps.repository.updatePaidCallRefund(id, update);
+    if (!call) {
+      reply.status(404).send({
+        error: {
+          code: "audit_call_not_found",
+          message: "No audit call exists with that id."
+        }
+      });
+      return;
+    }
+
+    return { call };
   });
 
   app.get("/openapi.json", async (request, reply) => {
@@ -538,6 +576,22 @@ function parseAuditLimit(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function parseRefundUpdate(body: unknown): PaidCallRefundUpdate | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  const record = body as Record<string, unknown>;
+  const refundStatus = parseRefundStatus(record.refundStatus);
+  if (!refundStatus || refundStatus === "not_applicable") return undefined;
+  const refundedAt = stringQuery(record.refundedAt) ??
+    (refundStatus === "refunded" ? new Date().toISOString() : undefined);
+  return {
+    refundStatus,
+    refundReason: stringQuery(record.refundReason),
+    refundReference: stringQuery(record.refundReference),
+    refundedAt,
+    refundNote: stringQuery(record.refundNote)
+  };
 }
 
 function isAuthorizedAdmin(request: FastifyRequest, secret: string): boolean {

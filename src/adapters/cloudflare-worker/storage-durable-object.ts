@@ -124,6 +124,9 @@ interface AuditRow {
   chain_id: number | null;
   refund_status: string;
   refund_reason: string | null;
+  refund_reference: string | null;
+  refunded_at: string | null;
+  refund_note: string | null;
   duration_ms: number | null;
 }
 
@@ -138,6 +141,8 @@ export class MppxStoreDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/audit") return this.handleAudit(request, url);
+    const auditRefundMatch = /^\/audit\/([^/]+)\/refund$/.exec(url.pathname);
+    if (auditRefundMatch) return this.handleAuditRefundUpdate(request, decodeURIComponent(auditRefundMatch[1]!));
     const match = /^\/store\/([^/]+)(?:\/(snapshot|commit))?$/.exec(url.pathname);
     if (!match) return new Response("Not Found", { status: 404 });
 
@@ -237,6 +242,9 @@ export class MppxStoreDurableObject {
       chain_id INTEGER,
       refund_status TEXT NOT NULL DEFAULT 'not_applicable',
       refund_reason TEXT,
+      refund_reference TEXT,
+      refunded_at TEXT,
+      refund_note TEXT,
       duration_ms INTEGER
     )`);
     const columns = new Set(
@@ -257,6 +265,9 @@ export class MppxStoreDurableObject {
     ensureAuditColumn(sql, columns, "chain_id", "chain_id INTEGER");
     ensureAuditColumn(sql, columns, "refund_status", "refund_status TEXT NOT NULL DEFAULT 'not_applicable'");
     ensureAuditColumn(sql, columns, "refund_reason", "refund_reason TEXT");
+    ensureAuditColumn(sql, columns, "refund_reference", "refund_reference TEXT");
+    ensureAuditColumn(sql, columns, "refunded_at", "refunded_at TEXT");
+    ensureAuditColumn(sql, columns, "refund_note", "refund_note TEXT");
     sql.exec("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_calls(created_at)");
     sql.exec("CREATE INDEX IF NOT EXISTS idx_audit_api ON audit_calls(api_id, created_at)");
     sql.exec("CREATE INDEX IF NOT EXISTS idx_audit_ref ON audit_calls(payment_reference)");
@@ -274,8 +285,8 @@ export class MppxStoreDurableObject {
           status, paid, payment_verified, receipt_attached,
           payment_method, payment_reference, external_id, receipt_timestamp, payment_verified_at,
           request_price, asset_symbol, asset_address, asset_decimals, chain_id,
-          refund_status, refund_reason, duration_ms)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          refund_status, refund_reason, refund_reference, refunded_at, refund_note, duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         String(entry.id),
         String(entry.createdAt),
         entry.completedAt ?? null,
@@ -300,6 +311,9 @@ export class MppxStoreDurableObject {
         entry.chainId ?? null,
         entry.refundStatus ?? "not_applicable",
         entry.refundReason ?? null,
+        entry.refundReference ?? null,
+        entry.refundedAt ?? null,
+        entry.refundNote ?? null,
         entry.durationMs ?? null
       );
       return new Response(null, { status: 204 });
@@ -327,6 +341,40 @@ export class MppxStoreDurableObject {
     }
 
     return new Response("Method Not Allowed", { status: 405 });
+  }
+
+  private async handleAuditRefundUpdate(request: Request, id: string): Promise<Response> {
+    this.ensureAuditSchema();
+    if (request.method !== "PATCH") return new Response("Method Not Allowed", { status: 405 });
+    const update = await request.json() as Record<string, unknown>;
+    const result = this.state.storage.sql.exec(
+      `UPDATE audit_calls
+       SET refund_status = ?,
+           refund_reason = ?,
+           refund_reference = ?,
+           refunded_at = ?,
+           refund_note = ?
+       WHERE id = ?`,
+      String(update.refundStatus),
+      update.refundReason ?? null,
+      update.refundReference ?? null,
+      update.refundedAt ?? null,
+      update.refundNote ?? null,
+      id
+    );
+    const changes = Number((result as unknown as { changes?: unknown }).changes ?? 0);
+    if (changes === 0) {
+      const existing = this.state.storage.sql.exec<AuditRow>(
+        "SELECT * FROM audit_calls WHERE id = ? LIMIT 1",
+        id
+      ).toArray()[0];
+      if (!existing) return new Response("Not Found", { status: 404 });
+    }
+    const row = this.state.storage.sql.exec<AuditRow>(
+      "SELECT * FROM audit_calls WHERE id = ? LIMIT 1",
+      id
+    ).toArray()[0];
+    return row ? Response.json(auditRowToJson(row)) : new Response("Not Found", { status: 404 });
   }
 }
 
@@ -373,6 +421,9 @@ function auditRowToJson(row: AuditRow): Record<string, unknown> {
     chainId: row.chain_id ?? undefined,
     refundStatus: row.refund_status,
     refundReason: row.refund_reason ?? undefined,
+    refundReference: row.refund_reference ?? undefined,
+    refundedAt: row.refunded_at ?? undefined,
+    refundNote: row.refund_note ?? undefined,
     durationMs: row.duration_ms ?? undefined
   };
 }
