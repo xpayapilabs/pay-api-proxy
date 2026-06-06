@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { FastifyRequest } from "fastify";
 import { createSqliteMppxStore } from "../adapters/node-container/mppx-store-sqlite.js";
+import type { PaidCallAuditSink } from "../core/audit.js";
 import type { AppConfig } from "../core/config.js";
 import {
   createPaidHttpProxy,
@@ -22,8 +23,12 @@ export {
 
 export type TraditionalMppxProxy = PaidHttpProxy;
 
-export function createTraditionalMppxProxy(config: AppConfig): TraditionalMppxProxy | undefined {
+export function createTraditionalMppxProxy(
+  config: AppConfig,
+  auditSink?: PaidCallAuditSink
+): TraditionalMppxProxy | undefined {
   return createPaidHttpProxy(config, {
+    auditSink,
     storeHandle: createSqliteMppxStore(config.databasePath),
     loadOpenApiDocument: readImportedOpenApiDocument
   });

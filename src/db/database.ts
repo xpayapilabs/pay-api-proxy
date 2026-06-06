@@ -114,14 +114,78 @@ export function migrate(db: DatabaseSync): void {
       FOREIGN KEY(payment_id) REFERENCES payments(id)
     );
 
+    CREATE TABLE IF NOT EXISTS audit_calls (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      completed_at TEXT,
+      api_id TEXT,
+      route_id TEXT,
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      upstream_path TEXT,
+      status INTEGER NOT NULL,
+      paid INTEGER NOT NULL,
+      payment_verified INTEGER NOT NULL DEFAULT 0,
+      receipt_attached INTEGER NOT NULL DEFAULT 0,
+      payment_method TEXT,
+      payment_reference TEXT,
+      external_id TEXT,
+      receipt_timestamp TEXT,
+      payment_verified_at TEXT,
+      request_price TEXT,
+      asset_symbol TEXT,
+      asset_address TEXT,
+      asset_decimals INTEGER,
+      chain_id INTEGER,
+      refund_status TEXT NOT NULL DEFAULT 'not_applicable',
+      refund_reason TEXT,
+      duration_ms INTEGER
+    );
+
     CREATE INDEX IF NOT EXISTS idx_payments_status_created_at ON payments(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_payment_reservations_session_id ON payment_reservations(session_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_calls(created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_api ON audit_calls(api_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_ref ON audit_calls(payment_reference);
+    CREATE INDEX IF NOT EXISTS idx_audit_refund ON audit_calls(refund_status, created_at);
   `);
 
   repairRenamedPaymentsForeignKeys(db);
   migratePaymentsRequestIdNullable(db);
   // The nullable migration can rename tables referenced by existing FKs, so repair both before and after it.
   repairRenamedPaymentsForeignKeys(db);
+  migrateAuditCalls(db);
+}
+
+function migrateAuditCalls(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(audit_calls)").all() as Array<Record<string, unknown>>)
+      .map((row) => String(row.name))
+  );
+  ensureColumn(db, columns, "completed_at", "completed_at TEXT");
+  ensureColumn(db, columns, "route_id", "route_id TEXT");
+  ensureColumn(db, columns, "upstream_path", "upstream_path TEXT");
+  ensureColumn(db, columns, "payment_verified", "payment_verified INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, columns, "receipt_attached", "receipt_attached INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, columns, "payment_verified_at", "payment_verified_at TEXT");
+  ensureColumn(db, columns, "request_price", "request_price TEXT");
+  ensureColumn(db, columns, "asset_symbol", "asset_symbol TEXT");
+  ensureColumn(db, columns, "asset_address", "asset_address TEXT");
+  ensureColumn(db, columns, "asset_decimals", "asset_decimals INTEGER");
+  ensureColumn(db, columns, "chain_id", "chain_id INTEGER");
+  ensureColumn(db, columns, "refund_status", "refund_status TEXT NOT NULL DEFAULT 'not_applicable'");
+  ensureColumn(db, columns, "refund_reason", "refund_reason TEXT");
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  columns: Set<string>,
+  name: string,
+  definition: string
+): void {
+  if (columns.has(name)) return;
+  db.exec(`ALTER TABLE audit_calls ADD COLUMN ${definition}`);
+  columns.add(name);
 }
 
 function migratePaymentsRequestIdNullable(db: DatabaseSync): void {

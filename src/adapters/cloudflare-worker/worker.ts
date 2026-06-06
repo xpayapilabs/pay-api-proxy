@@ -1,11 +1,6 @@
-import { Receipt } from "mppx";
 import type { Store } from "mppx/server";
-import {
-  createPaidHttpProxy,
-  traditionalApiForPublicPath,
-  type PaidHttpProxy
-} from "../../core/paid-http/proxy.js";
-import type { AppConfig } from "../../core/config.js";
+import { parseRefundStatus } from "../../core/audit.js";
+import { createPaidHttpProxy, type PaidHttpProxy } from "../../core/paid-http/proxy.js";
 import { buildPricingPayload } from "../../core/pricing.js";
 import { consumeAtomicRateLimit, isRateLimitExempt, rateLimitForRequest } from "../../core/rate-limit.js";
 import {
@@ -50,6 +45,13 @@ async function handleFetch(request: Request, env: CloudflareWorkerEnv, ctx: Exec
   const auditStub = mppxStoreStub(env.MPPX_STORE);
   const proxy = createPaidHttpProxy(config, {
     storeHandle,
+    auditSink: {
+      record(audit) {
+        ctx.waitUntil(recordPaidCall(auditStub, audit).catch((error) => {
+          console.error("pay-api-proxy: failed to record paid-call audit", error);
+        }));
+      }
+    },
     fetch: globalThis.fetch.bind(globalThis)
   });
 
@@ -73,10 +75,7 @@ async function handleFetch(request: Request, env: CloudflareWorkerEnv, ctx: Exec
   const rateLimit = await enforceRateLimit(request, config, storeHandle.store);
   if (rateLimit) return rateLimit;
 
-  const startedAt = Date.now();
-  const response = await proxy.fetch(request);
-  ctx.waitUntil(recordPaidCallSafely(auditStub, config, request, response, startedAt));
-  return response;
+  return proxy.fetch(request);
 }
 
 export { MppxStoreDurableObject } from "./storage-durable-object.js";
@@ -176,51 +175,10 @@ async function serveAuditQuery(
     since: url.searchParams.get("since") ?? undefined,
     apiId: url.searchParams.get("apiId") ?? undefined,
     reference: url.searchParams.get("reference") ?? undefined,
+    refundStatus: parseRefundStatus(url.searchParams.get("refundStatus")),
     limit: parseAuditLimit(url.searchParams.get("limit"))
   });
   return Response.json({ calls });
-}
-
-async function recordPaidCallSafely(
-  stub: DurableObjectStubLike,
-  config: AppConfig,
-  request: Request,
-  response: Response,
-  startedAt: number
-): Promise<void> {
-  try {
-    const url = new URL(request.url);
-    const api = traditionalApiForPublicPath(config, url.pathname);
-    // Only audit completed calls against a configured API; skip 402 payment challenges.
-    if (!api || response.status === 402) return;
-
-    const receiptHeader = response.headers.get("payment-receipt");
-    let receipt: Receipt.Receipt | undefined;
-    if (receiptHeader) {
-      try {
-        receipt = Receipt.deserialize(receiptHeader);
-      } catch {
-        receipt = undefined;
-      }
-    }
-
-    await recordPaidCall(stub, {
-      id: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
-      apiId: api.id,
-      method: request.method,
-      path: url.pathname,
-      status: response.status,
-      paid: Boolean(receipt),
-      paymentMethod: receipt?.method,
-      paymentReference: receipt?.reference,
-      externalId: receipt?.externalId,
-      receiptTimestamp: receipt?.timestamp,
-      durationMs: Date.now() - startedAt
-    });
-  } catch (error) {
-    console.error("pay-api-proxy: failed to record paid-call audit", error);
-  }
 }
 
 function isAuthorizedAdmin(request: Request, env: CloudflareWorkerEnv): boolean {

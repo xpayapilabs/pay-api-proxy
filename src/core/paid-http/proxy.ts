@@ -1,5 +1,8 @@
+import { Receipt } from "mppx";
 import { Proxy, Service } from "mppx/proxy";
 import { Mppx, tempo } from "mppx/server";
+import type { PaidCallAudit, PaidCallAuditSink } from "../audit.js";
+import { refundStatusForPaidCall } from "../audit.js";
 import type { AppConfig, TraditionalApiConfig, TraditionalApiRouteConfig } from "../config.js";
 import { rawAmountToDecimalString } from "../money.js";
 import { applyRequestRewrite, RequestRewriteError } from "../request-rewrite.js";
@@ -14,6 +17,7 @@ export interface PaidHttpProxy {
 
 export interface PaidHttpProxyDeps {
   storeHandle: MppxStoreHandle;
+  auditSink?: PaidCallAuditSink;
   fetch?: typeof fetch;
   loadOpenApiDocument?: (path: string) => Record<string, unknown>;
 }
@@ -22,6 +26,11 @@ interface TraditionalMppx {
   tempo: {
     charge(options: Record<string, unknown>): Service.IntentHandler;
   };
+}
+
+export interface PaymentSuccessSnapshot {
+  receipt: Receipt.Receipt;
+  verifiedAt: string;
 }
 
 const OPENAPI_HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options"]);
@@ -57,6 +66,7 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
   if (apis.length === 0) return undefined;
   const prefixedMount = apis.length > 1;
   const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const paymentSuccesses = new WeakMap<Request, PaymentSuccessSnapshot>();
 
   const mppx = Mppx.create({
     realm: paymentRealm(config.publicBaseUrl),
@@ -73,6 +83,14 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
       } as unknown as Parameters<typeof tempo.charge>[0])
     ]
   });
+  mppx.onPaymentSuccess((context) => {
+    if (context.input instanceof Request) {
+      paymentSuccesses.set(context.input, {
+        receipt: context.receipt as Receipt.Receipt,
+        verifiedAt: new Date().toISOString()
+      });
+    }
+  });
 
   const proxy = Proxy.create({
     basePath: "/api",
@@ -84,7 +102,7 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
   });
 
   return {
-    fetch: (request) => {
+    fetch: async (request) => {
       const url = new URL(request.url);
       const api = traditionalApiForPublicPath(config, url.pathname);
       if (!api) {
@@ -98,7 +116,29 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
         }, { status: 404 }));
       }
       const internalRequest = prefixedMount ? request : toInternalProxyRequest(request, api.id);
-      return fetchWithUpstreamTimeout(proxy, internalRequest, api.upstreamTimeoutMs);
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), api.upstreamTimeoutMs);
+      const handledRequest = new Request(internalRequest, { signal: controller.signal });
+      try {
+        const response = await proxy.fetch(handledRequest);
+        await recordTraditionalAuditSafely(deps.auditSink, config, request, handledRequest, response, {
+          paymentSuccess: paymentSuccesses.get(handledRequest),
+          startedAt
+        });
+        return response;
+      } catch (error) {
+        const response = traditionalProxyErrorResponse(error, api.upstreamTimeoutMs);
+        await recordTraditionalAuditSafely(deps.auditSink, config, request, handledRequest, response, {
+          paymentSuccess: paymentSuccesses.get(handledRequest),
+          startedAt
+        });
+        if (response) return response;
+        throw error;
+      } finally {
+        clearTimeout(timeout);
+        paymentSuccesses.delete(handledRequest);
+      }
     },
     openApiResponse: (publicBaseUrl) => publicOpenApiResponse(proxy, apis, config, publicBaseUrl, {
       fetch: fetchImpl,
@@ -109,32 +149,24 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
   };
 }
 
-async function fetchWithUpstreamTimeout(proxy: Proxy.Proxy, request: Request, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await proxy.fetch(new Request(request, { signal: controller.signal }));
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      return Response.json({
-        error: {
-          code: "upstream_timeout",
-          message: `Upstream request timed out after ${timeoutMs}ms`
-        }
-      }, { status: 504 });
-    }
-    if (error instanceof RequestRewriteError) {
-      return Response.json({
-        error: {
-          code: "request_rewrite_failed",
-          message: error.message
-        }
-      }, { status: 400 });
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+function traditionalProxyErrorResponse(error: unknown, timeoutMs: number): Response | undefined {
+  if (error instanceof Error && error.name === "AbortError") {
+    return Response.json({
+      error: {
+        code: "upstream_timeout",
+        message: `Upstream request timed out after ${timeoutMs}ms`
+      }
+    }, { status: 504 });
   }
+  if (error instanceof RequestRewriteError) {
+    return Response.json({
+      error: {
+        code: "request_rewrite_failed",
+        message: error.message
+      }
+    }, { status: 400 });
+  }
+  return undefined;
 }
 
 function createTraditionalService(
@@ -257,6 +289,155 @@ function filterForwardedHeaders(request: Request, allowedHeaders: string[]): Req
     if (allowed.has(key.toLowerCase())) headers.set(key, value);
   }
   return new Request(request, { headers });
+}
+
+async function recordTraditionalAuditSafely(
+  sink: PaidCallAuditSink | undefined,
+  config: AppConfig,
+  publicRequest: Request,
+  handledRequest: Request,
+  response: Response | undefined,
+  context: {
+    paymentSuccess?: PaymentSuccessSnapshot;
+    startedAt: number;
+  }
+): Promise<void> {
+  if (!sink || response?.status === 402) return;
+  const audit = buildTraditionalPaidCallAudit(config, publicRequest, response, {
+    handledRequest,
+    paymentSuccess: context.paymentSuccess,
+    startedAt: context.startedAt
+  });
+  if (!audit) return;
+  try {
+    await sink.record(audit);
+  } catch (error) {
+    console.error("pay-api-proxy: failed to record paid-call audit", error);
+  }
+}
+
+export function buildTraditionalPaidCallAudit(
+  config: AppConfig,
+  publicRequest: Request,
+  response: Response | undefined,
+  context: {
+    handledRequest?: Request;
+    paymentSuccess?: PaymentSuccessSnapshot;
+    startedAt: number;
+    now?: Date;
+  }
+): PaidCallAudit | undefined {
+  const publicUrl = new URL(publicRequest.url);
+  const api = traditionalApiForPublicPath(config, publicUrl.pathname);
+  if (!api) return undefined;
+
+  const completedDate = context.now ?? new Date();
+  const completedAt = completedDate.toISOString();
+  const status = response?.status ?? 500;
+  const receipt = response ? receiptFromResponse(response) : undefined;
+  const paymentReceipt = receipt ?? context.paymentSuccess?.receipt;
+  const paymentVerified = Boolean(context.paymentSuccess || receipt);
+  const paid = Boolean(paymentReceipt || context.paymentSuccess);
+  const upstreamPath = traditionalApiUpstreamPathForPublicPath(config, api, publicUrl.pathname);
+  const price = pricedTraditionalRouteForRequest(api, publicRequest.method, upstreamPath);
+  const fallbackExternalId = price?.route?.id ? `api:${api.id}:${price.route.id}` : `api:${api.id}`;
+  const refund = refundStatusForPaidCall({ paid, status });
+
+  return {
+    id: globalThis.crypto.randomUUID(),
+    createdAt: completedAt,
+    completedAt,
+    apiId: api.id,
+    routeId: price?.route?.id,
+    method: publicRequest.method.toUpperCase(),
+    path: publicUrl.pathname,
+    upstreamPath,
+    status,
+    paid,
+    paymentVerified,
+    receiptAttached: Boolean(receipt),
+    paymentMethod: paymentReceipt?.method,
+    paymentReference: paymentReceipt?.reference,
+    externalId: paymentReceipt?.externalId ?? fallbackExternalId,
+    receiptTimestamp: paymentReceipt?.timestamp,
+    paymentVerifiedAt: context.paymentSuccess?.verifiedAt ?? paymentReceipt?.timestamp,
+    requestPrice: price?.requestPrice.toString(),
+    assetSymbol: api.assetSymbol,
+    assetAddress: api.assetAddress,
+    assetDecimals: config.tempo.assetDecimals,
+    chainId: api.chainId,
+    refundStatus: refund.refundStatus,
+    refundReason: refund.refundReason,
+    durationMs: Math.max(0, completedDate.getTime() - context.startedAt)
+  };
+}
+
+function receiptFromResponse(response: Response): Receipt.Receipt | undefined {
+  const receiptHeader = response.headers.get("payment-receipt");
+  if (!receiptHeader) return undefined;
+  try {
+    return Receipt.deserialize(receiptHeader);
+  } catch {
+    return undefined;
+  }
+}
+
+function pricedTraditionalRouteForRequest(
+  api: TraditionalApiConfig,
+  method: string,
+  upstreamPath: string
+): { route?: TraditionalApiRouteConfig; requestPrice: bigint } | undefined {
+  const normalizedMethod = method.toUpperCase();
+  const sortedRoutes = [...api.routes].sort((left, right) =>
+    traditionalRouteSpecificity(right) - traditionalRouteSpecificity(left)
+  );
+  for (const route of sortedRoutes) {
+    if (!route.methods.includes(normalizedMethod)) continue;
+    if (traditionalRouteMatches(route.path, upstreamPath)) return { route, requestPrice: route.requestPrice };
+  }
+  if (api.allowUnmatchedRoutes !== false && api.methods.includes(normalizedMethod)) {
+    return { requestPrice: api.requestPrice };
+  }
+  return undefined;
+}
+
+function traditionalApiUpstreamPathForPublicPath(
+  config: AppConfig,
+  api: TraditionalApiConfig,
+  publicPath: string
+): string {
+  if (!httpApisUsePrefixedMount(config)) return publicPath || "/";
+  const prefix = `/api/${api.id}`;
+  if (publicPath === prefix) return "/";
+  if (publicPath.startsWith(`${prefix}/`)) return publicPath.slice(prefix.length) || "/";
+  return publicPath || "/";
+}
+
+function traditionalRouteMatches(routePath: string, upstreamPath: string): boolean {
+  const normalizedPath = upstreamPath || "/";
+  if (routePath === "*" || routePath === "/*") return true;
+  if (routePath.endsWith("/*")) {
+    const prefix = routePath.slice(0, -2) || "/";
+    return normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`);
+  }
+  return traditionalRouteRegex(routePath).test(normalizedPath);
+}
+
+function traditionalRouteRegex(routePath: string): RegExp {
+  const pattern = routePath
+    .split("/")
+    .map((segment) => {
+      if (segment === "") return "";
+      if (segment === "*") return ".*";
+      if (/^\{[^}/]+\}$/.test(segment) || /^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) return "[^/]+";
+      return escapeRegex(segment).replaceAll("\\*", ".*");
+    })
+    .join("/");
+  return new RegExp(`^${pattern}$`);
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
 }
 
 function toUrlPatternPath(path: string): string {

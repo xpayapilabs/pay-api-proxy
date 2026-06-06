@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { nanoid } from "nanoid";
 import type { PriceQuote } from "../charging/types.js";
+import { parseRefundStatus } from "../core/audit.js";
 import type { AppConfig, OpenAiCompatibleEndpoint } from "../core/config.js";
 import { parseAmount } from "../core/money.js";
 import type { PaymentReservationRecord, Repository } from "../db/repository.js";
@@ -34,7 +35,11 @@ export interface AppDeps {
 
 export function buildApp(deps: AppDeps) {
   const sessions = createSessionBackends(deps.config, deps.repository);
-  const traditionalMppxProxy = createTraditionalMppxProxy(deps.config);
+  const traditionalMppxProxy = createTraditionalMppxProxy(deps.config, {
+    record(audit) {
+      deps.repository.recordPaidCallAudit(audit);
+    }
+  });
   const requestTracker = deps.requestTracker ?? createRequestTracker();
   const app = Fastify({
     logger: deps.config.nodeEnv === "test" ? false : { level: "info" },
@@ -115,6 +120,30 @@ export function buildApp(deps: AppDeps) {
   }));
 
   app.get("/pricing", async () => buildPricingPayload(deps.config));
+
+  app.get("/admin/calls", async (request, reply) => {
+    if (!isAuthorizedAdmin(request, deps.config.mppx.secretKey)) {
+      reply.header("www-authenticate", "Bearer");
+      reply.status(401).send({
+        error: {
+          code: "unauthorized",
+          message: "GET /admin/calls requires Authorization: Bearer <MPP_SECRET_KEY>"
+        }
+      });
+      return;
+    }
+
+    const query = request.query as Record<string, unknown>;
+    return {
+      calls: deps.repository.listPaidCallAudits({
+        since: stringQuery(query.since),
+        apiId: stringQuery(query.apiId),
+        reference: stringQuery(query.reference),
+        refundStatus: parseRefundStatus(stringQuery(query.refundStatus)),
+        limit: parseAuditLimit(stringQuery(query.limit))
+      })
+    };
+  });
 
   app.get("/openapi.json", async (request, reply) => {
     if (!traditionalMppxProxy) {
@@ -497,6 +526,34 @@ function parseAllowedModels(value: unknown, config: AppConfig): string[] | undef
   if (models.length !== value.length) return undefined;
   if (models.some((model) => !enabled.has(model))) return undefined;
   return [...new Set(models)];
+}
+
+function stringQuery(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (Array.isArray(value) && typeof value[0] === "string" && value[0].length > 0) return value[0];
+  return undefined;
+}
+
+function parseAuditLimit(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
+function isAuthorizedAdmin(request: FastifyRequest, secret: string): boolean {
+  if (!secret) return false;
+  const header = request.headers.authorization ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
+  return token.length > 0 && constantTimeEqual(token, secret);
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return diff === 0;
 }
 
 function serializePaymentSession(session: {

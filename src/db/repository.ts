@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { PaidCallAudit, PaidCallQuery } from "../core/audit.js";
 
 export interface RequestRecord {
   id: string;
@@ -476,6 +477,61 @@ export class Repository {
     const row = this.db.prepare("SELECT * FROM receipts WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     return row ? mapReceipt(row) : undefined;
   }
+
+  recordPaidCallAudit(record: PaidCallAudit): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO audit_calls (
+        id, created_at, completed_at, api_id, route_id, method, path, upstream_path,
+        status, paid, payment_verified, receipt_attached,
+        payment_method, payment_reference, external_id, receipt_timestamp, payment_verified_at,
+        request_price, asset_symbol, asset_address, asset_decimals, chain_id,
+        refund_status, refund_reason, duration_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.id,
+      record.createdAt,
+      record.completedAt ?? null,
+      record.apiId ?? null,
+      record.routeId ?? null,
+      record.method,
+      record.path,
+      record.upstreamPath ?? null,
+      record.status,
+      record.paid ? 1 : 0,
+      record.paymentVerified ? 1 : 0,
+      record.receiptAttached ? 1 : 0,
+      record.paymentMethod ?? null,
+      record.paymentReference ?? null,
+      record.externalId ?? null,
+      record.receiptTimestamp ?? null,
+      record.paymentVerifiedAt ?? null,
+      record.requestPrice ?? null,
+      record.assetSymbol ?? null,
+      record.assetAddress ?? null,
+      record.assetDecimals ?? null,
+      record.chainId ?? null,
+      record.refundStatus,
+      record.refundReason ?? null,
+      record.durationMs ?? null
+    );
+  }
+
+  listPaidCallAudits(query: PaidCallQuery = {}): PaidCallAudit[] {
+    const clauses: string[] = [];
+    const bindings: string[] = [];
+    if (query.since) { clauses.push("created_at >= ?"); bindings.push(query.since); }
+    if (query.apiId) { clauses.push("api_id = ?"); bindings.push(query.apiId); }
+    if (query.reference) { clauses.push("payment_reference = ?"); bindings.push(query.reference); }
+    if (query.refundStatus) { clauses.push("refund_status = ?"); bindings.push(query.refundStatus); }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const limit = clampAuditLimit(query.limit);
+    const rows = this.db.prepare(`
+      SELECT * FROM audit_calls ${where}
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(...bindings, limit) as Record<string, unknown>[];
+    return rows.map(mapPaidCallAudit);
+  }
 }
 
 function asString(value: unknown): string | undefined {
@@ -568,6 +624,41 @@ function mapReceipt(row: Record<string, unknown>): ReceiptRecord {
     status: String(row.status),
     createdAt: String(row.created_at)
   };
+}
+
+function mapPaidCallAudit(row: Record<string, unknown>): PaidCallAudit {
+  return {
+    id: String(row.id),
+    createdAt: String(row.created_at),
+    completedAt: asString(row.completed_at),
+    apiId: asString(row.api_id),
+    routeId: asString(row.route_id),
+    method: String(row.method),
+    path: String(row.path),
+    upstreamPath: asString(row.upstream_path),
+    status: Number(row.status),
+    paid: Number(row.paid) === 1,
+    paymentVerified: Number(row.payment_verified) === 1,
+    receiptAttached: Number(row.receipt_attached) === 1,
+    paymentMethod: asString(row.payment_method),
+    paymentReference: asString(row.payment_reference),
+    externalId: asString(row.external_id),
+    receiptTimestamp: asString(row.receipt_timestamp),
+    paymentVerifiedAt: asString(row.payment_verified_at),
+    requestPrice: asString(row.request_price),
+    assetSymbol: asString(row.asset_symbol),
+    assetAddress: asString(row.asset_address),
+    assetDecimals: row.asset_decimals === null || row.asset_decimals === undefined ? undefined : Number(row.asset_decimals),
+    chainId: row.chain_id === null || row.chain_id === undefined ? undefined : Number(row.chain_id),
+    refundStatus: String(row.refund_status) as PaidCallAudit["refundStatus"],
+    refundReason: asString(row.refund_reason),
+    durationMs: row.duration_ms === null || row.duration_ms === undefined ? undefined : Number(row.duration_ms)
+  };
+}
+
+function clampAuditLimit(value: number | undefined): number {
+  if (!value || !Number.isFinite(value) || value <= 0) return 100;
+  return Math.min(Math.floor(value), 1000);
 }
 
 function parseStringArray(value: unknown): string[] {
