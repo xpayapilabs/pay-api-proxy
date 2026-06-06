@@ -45,8 +45,46 @@ export function stripJsonComments(value: string): string {
   return output;
 }
 
+export function stripJsonTrailingCommas(value: string): string {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = true;
+      output += char;
+      continue;
+    }
+
+    if (char === ",") {
+      let nextIndex = index + 1;
+      while (nextIndex < value.length && /\s/.test(value[nextIndex]!)) nextIndex += 1;
+      if (value[nextIndex] === "]" || value[nextIndex] === "}") continue;
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
 export function parseJsoncObject(value: string, sourceName: string): Record<string, unknown> {
-  const parsed = JSON.parse(stripJsonComments(value)) as unknown;
+  const parsed = JSON.parse(stripJsonTrailingCommas(stripJsonComments(value))) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`${sourceName} must contain a JSON object`);
   }

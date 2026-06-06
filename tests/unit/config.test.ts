@@ -487,14 +487,16 @@ describe("config", () => {
     const config = loadCloudflareWorkerConfig({
       MPP_SECRET_KEY: "worker-secret",
       PUBLIC_BASE_URL: "https://api.example.com",
-      PAY_API_PROXY_CONFIG: JSON.stringify({
-        apis: [{
-          id: "weather",
-          upstreamBaseUrl: "https://weather.example",
-          pricing: { request: "0.001" },
-          responseSanitizer: { removeJsonKeys: ["cost", "remain_money", "quota"] }
-        }]
-      })
+      PAY_API_PROXY_CONFIG: `{
+        "apis": [{
+          "id": "weather",
+          "upstreamBaseUrl": "https://weather.example",
+          "pricing": { "request": "0.001" },
+          "responseSanitizer": {
+            "removeJsonKeys": ["cost", "remain_money", "quota",],
+          },
+        }],
+      }`
     });
 
     expect(config.apis[0].responseSanitizer).toEqual({
