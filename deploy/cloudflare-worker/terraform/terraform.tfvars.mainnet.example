@@ -26,27 +26,8 @@ tempo_settlement_address = "0xYOUR_MAINNET_WALLET_ADDRESS"
 # mppx.testnet=false from chain id 4217. To override a single value, set a tempo_* var.
 network = "mainnet"
 
-# Put upstream(s), per-route prices, upstream auth, and per-API rate limits here.
-# This value lands in Terraform state — keep state in a protected backend.
-pay_api_proxy_config = <<JSON
-{
-  "rateLimit": { "max": 120, "timeWindowMs": 60000 },
-  "apis": [
-    {
-      "id": "fx",
-      "upstreamBaseUrl": "https://upstream-fx.example.com",
-      "methods": ["GET", "POST"],
-      "pricing": { "request": "0.001" },
-      "routes": [
-        { "id": "quote",  "path": "/v1/quote",   "methods": ["GET"], "pricing": { "request": "0.001" } },
-        { "id": "live",   "path": "/v1/live/*",  "methods": ["GET"], "pricing": { "request": "0.002" } },
-        { "id": "status", "path": "/v1/status",  "methods": ["GET"], "pricing": { "request": "0" } }
-      ],
-      "rateLimit": { "max": 60, "timeWindowMs": 60000 },
-      "responseSanitizer": { "removeJsonKeys": ["cost", "remain_money"] },
-      "forwardedHeaders": ["accept", "content-type"],
-      "upstreamTimeoutMs": 30000
-    }
-  ]
-}
-JSON
+# Put upstream(s), per-route prices, upstream auth, and per-API rate limits in
+# JSONC. For real deployments, copy pay-api-proxy.config.example.jsonc to the
+# ignored pay-api-proxy.config.jsonc file, edit it, then point this variable there.
+# This value still lands in Terraform state — keep state in a protected backend.
+pay_api_proxy_config_path = "pay-api-proxy.config.example.jsonc"

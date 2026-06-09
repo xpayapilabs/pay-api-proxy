@@ -2,6 +2,15 @@ locals {
   durable_object_class_name = "MppxStoreDurableObject"
   worker_bundle_path        = var.worker_bundle_path != null ? var.worker_bundle_path : abspath("${path.module}/../../../dist/cloudflare-worker/worker.js")
 
+  pay_api_proxy_config_inline_set   = var.pay_api_proxy_config == null ? false : trimspace(nonsensitive(var.pay_api_proxy_config)) != ""
+  pay_api_proxy_config_path         = var.pay_api_proxy_config_path == null ? null : trimspace(var.pay_api_proxy_config_path)
+  pay_api_proxy_config_path_set     = local.pay_api_proxy_config_path == null ? false : local.pay_api_proxy_config_path != ""
+  pay_api_proxy_config_path_abs     = local.pay_api_proxy_config_path_set ? (startswith(local.pay_api_proxy_config_path, "/") ? local.pay_api_proxy_config_path : abspath("${path.module}/${local.pay_api_proxy_config_path}")) : null
+  pay_api_proxy_config_path_exists  = local.pay_api_proxy_config_path_set ? fileexists(local.pay_api_proxy_config_path_abs) : true
+  pay_api_proxy_config_source_count = (local.pay_api_proxy_config_inline_set ? 1 : 0) + (local.pay_api_proxy_config_path_set ? 1 : 0)
+  pay_api_proxy_config_from_path    = local.pay_api_proxy_config_path_set && local.pay_api_proxy_config_path_exists ? file(local.pay_api_proxy_config_path_abs) : null
+  pay_api_proxy_config              = local.pay_api_proxy_config_source_count == 1 && local.pay_api_proxy_config_from_path != null ? local.pay_api_proxy_config_from_path : coalesce(var.pay_api_proxy_config, "")
+
   # One knob: var.network picks the whole Tempo chain preset. Individual tempo_* vars
   # still override when set. The Worker derives mppx.testnet from the chain id (4217 = live).
   network_presets = {
@@ -81,7 +90,7 @@ locals {
     {
       name        = "PAY_API_PROXY_CONFIG"
       type        = "json"
-      json        = nonsensitive(jsonencode(var.pay_api_proxy_config))
+      json        = nonsensitive(jsonencode(sensitive(local.pay_api_proxy_config)))
       class_name  = null
       script_name = null
     }
@@ -162,6 +171,18 @@ resource "cloudflare_workers_script" "pay_api_proxy" {
       enabled            = var.worker_observability_traces_enabled
       head_sampling_rate = var.worker_observability_traces_head_sampling_rate
       persist            = var.worker_observability_traces_persist
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.pay_api_proxy_config_source_count == 1
+      error_message = "Set exactly one of pay_api_proxy_config or pay_api_proxy_config_path."
+    }
+
+    precondition {
+      condition     = local.pay_api_proxy_config_path_exists
+      error_message = "pay_api_proxy_config_path must point to an existing JSON/JSONC file. Relative paths are resolved from the Terraform folder."
     }
   }
 }

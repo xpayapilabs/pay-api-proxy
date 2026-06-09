@@ -23,47 +23,6 @@ extra_secret_text_bindings = {
   VENDOR_FX_API_KEY = "replace-with-vendor-fx-api-key"
 }
 
-pay_api_proxy_config = <<JSON
-{
-  "rateLimit": { "max": 120, "timeWindowMs": 60000 },
-  "apis": [
-    {
-      "id": "fx",
-      "upstreamBaseUrl": "https://upstream-fx.example.com",
-      "methods": ["GET", "POST"],
-      "pricing": { "request": "0.001" },
-      "routes": [
-        { "id": "quote", "path": "/v1/quote", "methods": ["GET"], "pricing": { "request": "0.001" } },
-        { "id": "live", "path": "/v1/live/*", "methods": ["GET"], "pricing": { "request": "0.002" } },
-        { "id": "status", "path": "/v1/status", "methods": ["GET"], "pricing": { "request": "0" } }
-      ],
-      "rateLimit": { "max": 60, "timeWindowMs": 60000 },
-      "responseSanitizer": { "removeJsonKeys": ["cost", "remain_money"] },
-      "requestRewrite": {
-        "headers": { "content-type": "application/json" },
-        "body": {
-          "mode": "mergeJson",
-          "json": {
-            "key": { "env": "VENDOR_FX_API_KEY" }
-          }
-        }
-      },
-      "forwardedHeaders": ["accept", "content-type"],
-      "upstreamTimeoutMs": 30000
-    },
-    {
-      "id": "weather",
-      "upstreamBaseUrl": "https://upstream-weather.example.com",
-      "methods": ["GET"],
-      "pricing": { "request": "0.003" },
-      "routes": [
-        { "id": "current", "path": "/v1/current", "methods": ["GET"], "pricing": { "request": "0.003" } },
-        { "id": "forecast", "path": "/v1/forecast/*", "methods": ["GET"], "pricing": { "request": "0.004" } }
-      ],
-      "rateLimit": { "max": 30, "timeWindowMs": 60000 },
-      "forwardedHeaders": ["accept"],
-      "upstreamTimeoutMs": 30000
-    }
-  ]
-}
-JSON
+# For real deployments, copy pay-api-proxy.config.example.jsonc to the ignored
+# pay-api-proxy.config.jsonc file, edit it, then point this variable there.
+pay_api_proxy_config_path = "pay-api-proxy.config.example.jsonc"

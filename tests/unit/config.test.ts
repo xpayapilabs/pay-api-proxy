@@ -461,6 +461,62 @@ describe("config", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("derives traditional route ids from unique route paths when omitted", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-route-id-from-path-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        apis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" },
+          routes: [
+            { path: "/v1/forecast/{city}", methods: ["GET"], pricing: { request: "0.002" } },
+            { path: "/v1/live/*", methods: ["GET"], pricing: { request: "0.003" } },
+            { path: "*", methods: ["POST"], pricing: { request: "0.004" } }
+          ]
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    const config = loadConfig();
+    expect(config.apis[0].routes.map((route) => route.id)).toEqual([
+      "v1-forecast-city",
+      "v1-live-wildcard",
+      "all"
+    ]);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("rejects duplicate traditional route paths when route ids are derived", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-duplicate-route-path-"));
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        apis: [{
+          id: "weather",
+          upstreamBaseUrl: "https://weather.example",
+          pricing: { request: "0.001" },
+          routes: [
+            { path: "/v1/forecast", methods: ["GET"], pricing: { request: "0.002" } },
+            { path: "/v1/forecast", methods: ["POST"], pricing: { request: "0.003" } }
+          ]
+        }]
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    expect(() => loadConfig()).toThrow(/duplicate route paths: \/v1\/forecast/);
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("rejects invalid traditional API response sanitizer configuration", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-response-sanitizer-invalid-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");
@@ -502,6 +558,29 @@ describe("config", () => {
     expect(config.apis[0].responseSanitizer).toEqual({
       removeJsonKeys: ["cost", "remain_money", "quota"]
     });
+  });
+
+  it("derives Cloudflare Worker route ids from unique route paths when omitted", () => {
+    const config = loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_CONFIG: `{
+        "apis": [{
+          "id": "weather",
+          "upstreamBaseUrl": "https://weather.example",
+          "pricing": { "request": "0.001" },
+          "routes": [
+            { "path": "/v1/forecast/{city}", "methods": ["GET"], "pricing": { "request": "0.002" } },
+            { "path": "/v1/live/*", "methods": ["GET"], "pricing": { "request": "0.003" } },
+          ],
+        }],
+      }`
+    });
+
+    expect(config.apis[0].routes.map((route) => route.id)).toEqual([
+      "v1-forecast-city",
+      "v1-live-wildcard"
+    ]);
   });
 
   it("loads partial per-upstream rate limit configuration", () => {

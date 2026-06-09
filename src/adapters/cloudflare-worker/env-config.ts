@@ -6,6 +6,7 @@ import type {
   TraditionalApiRateLimitConfig,
   TraditionalApiRouteConfig
 } from "../../core/config.js";
+import { routeIdFromPath } from "../../core/config.js";
 import { DEFAULT_APP_SETTINGS } from "../../core/default-config.js";
 import { parseJsoncObject } from "../../core/jsonc.js";
 import { parseRequestRewriteConfig } from "../../core/request-rewrite.js";
@@ -210,6 +211,8 @@ function routesField(
 ): TraditionalApiRouteConfig[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error(`${name} must be an array`);
+  const seenPaths = new Set<string>();
+  const seenIds = new Set<string>();
   return value.map((entry, index) => {
     const routeName = `${name}[${index}]`;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -218,9 +221,13 @@ function routesField(
     const route = entry as Record<string, unknown>;
     const path = requiredStringField(route, "path", `${routeName}.path`);
     if (path !== "*" && !path.startsWith("/")) throw new Error(`${routeName}.path must be "*" or start with "/"`);
-    const id = optionalStringField(route, "id");
+    if (seenPaths.has(path)) throw new Error(`${name} must not contain duplicate route paths: ${path}`);
+    seenPaths.add(path);
+    const id = optionalStringField(route, "id") ?? routeIdFromPath(path);
+    if (seenIds.has(id)) throw new Error(`${name} must not contain duplicate route ids: ${id}`);
+    seenIds.add(id);
     return {
-      ...(id ? { id } : {}),
+      id,
       path,
       methods: methodsField(route, `${routeName}.methods`, fallbackMethods),
       requestPrice: priceField(route, routeName, assetDecimals),

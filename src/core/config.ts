@@ -118,6 +118,18 @@ export interface TraditionalApiRouteConfig {
 
 export const DEV_SIGNING_SECRET = "dev-node-signing-secret-change-me";
 
+export function routeIdFromPath(path: string): string {
+  if (path === "*") return "all";
+  const normalized = path
+    .replace(/\{([^}]+)\}/g, "$1")
+    .replace(/\*/g, "wildcard")
+    .toLowerCase()
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "root";
+}
+
 const TEST_MODEL: ModelConfig = {
   id: "model_test_chat",
   modelName: "test-chat",
@@ -745,6 +757,8 @@ function parseTraditionalApiConfig(
     if (!Array.isArray(value)) {
       throw new Error(`${routesName} must be an array`);
     }
+    const seenPaths = new Set<string>();
+    const seenIds = new Set<string>();
     return value.map((entry, routeIndex) => {
       const routeName = `${routesName}[${routeIndex}]`;
       if (!entry || typeof entry !== "object") {
@@ -759,8 +773,17 @@ function parseTraditionalApiConfig(
       if (routeId !== undefined && (typeof routeId !== "string" || routeId.length === 0)) {
         throw new Error(`${routeName}.id must be a string`);
       }
+      if (seenPaths.has(routePath)) {
+        throw new Error(`${routesName} must not contain duplicate route paths: ${routePath}`);
+      }
+      seenPaths.add(routePath);
+      const effectiveRouteId = routeId ?? routeIdFromPath(routePath);
+      if (seenIds.has(effectiveRouteId)) {
+        throw new Error(`${routesName} must not contain duplicate route ids: ${effectiveRouteId}`);
+      }
+      seenIds.add(effectiveRouteId);
       return {
-        id: routeId,
+        id: effectiveRouteId,
         path: routePath,
         methods: routeMethodsValue(route, routeName),
         requestPrice: requestPriceValue(route, routeName),

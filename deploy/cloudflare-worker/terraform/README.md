@@ -40,7 +40,19 @@ cp terraform.tfvars.mainnet.example terraform.tfvars
 
 Edit `terraform.tfvars`.
 
-Put paid API runtime configuration in `pay_api_proxy_config`. Use `apis[]` for multiple upstreams, with per-route prices and optional per-API rate limits.
+Put paid API runtime configuration in JSONC and point Terraform at it with `pay_api_proxy_config_path`:
+
+```bash
+cp pay-api-proxy.config.example.jsonc pay-api-proxy.config.jsonc
+```
+
+```hcl
+pay_api_proxy_config_path = "pay-api-proxy.config.jsonc"
+```
+
+Relative paths are resolved from this Terraform folder. Use `apis[]` for multiple upstreams, with per-route prices and optional per-API rate limits.
+
+Inline heredoc config is still supported with `pay_api_proxy_config = <<JSONC ... JSONC`, but set exactly one of `pay_api_proxy_config` or `pay_api_proxy_config_path`.
 
 Use `extra_secret_text_bindings` for vendor API keys referenced by `requestRewrite`, for example `{ "key": { "env": "VENDOR_FX_API_KEY" } }`.
 
@@ -70,6 +82,7 @@ terraform apply -var='network=mainnet' -var='deployment_phase=normal'
 Keep personal deploy values in ignored local files, not in files that are pushed:
 
 - `terraform.tfvars`: Cloudflare account/zone IDs, Worker name, public domain, wallet address, mppx secret, vendor API keys, and private upstream configuration.
+- `pay-api-proxy.config.jsonc`: private upstream URLs, route prices, request rewrites, response sanitizers, and per-API rate limits loaded by `pay_api_proxy_config_path`.
 - `terraform.tfstate*`: Terraform state and backups. These can contain `mpp_secret_key`, `PAY_API_PROXY_CONFIG`, and vendor API key bindings.
 - `.terraform/`: Terraform provider/plugin cache and local backend metadata.
 - `*.auto.tfvars`: optional local override files for personal experiments.
@@ -80,12 +93,14 @@ For a private deployment profile, keep a separate copy such as:
 
 ```text
 ~/pay-api-proxy-private/cloudflare-worker/terraform.tfvars
+~/pay-api-proxy-private/cloudflare-worker/pay-api-proxy.config.jsonc
 ```
 
 Then copy it into this folder before applying:
 
 ```bash
 cp ~/pay-api-proxy-private/cloudflare-worker/terraform.tfvars deploy/cloudflare-worker/terraform/terraform.tfvars
+cp ~/pay-api-proxy-private/cloudflare-worker/pay-api-proxy.config.jsonc deploy/cloudflare-worker/terraform/pay-api-proxy.config.jsonc
 ```
 
 Do not put real Cloudflare account IDs, zone IDs, domains, upstream URLs, API keys, or wallet private keys in this README or in `*.example` files.
@@ -132,7 +147,7 @@ terraform apply -var='deployment_phase=normal'
 
 ## Remote state (do this before production)
 
-`MPP_SECRET_KEY` and `PAY_API_PROXY_CONFIG` are deployed through Terraform bindings, so Terraform state contains those sensitive values in cleartext. The default local `terraform.tfstate` is fine for testing only.
+`MPP_SECRET_KEY` and `PAY_API_PROXY_CONFIG` are deployed through Terraform bindings, so Terraform state contains those sensitive values in cleartext. This is true whether `PAY_API_PROXY_CONFIG` comes from inline `pay_api_proxy_config` or from `pay_api_proxy_config_path`. The default local `terraform.tfstate` is fine for testing only.
 
 Before a real deploy, configure a private, encrypted, access-controlled backend. `versions.tf` contains a ready-to-uncomment Cloudflare R2 (S3-compatible) `backend "s3"` block. Fill it in, then:
 

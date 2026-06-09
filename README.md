@@ -85,13 +85,12 @@ HTTP upstream APIs are configured with `apis`:
       "responseSanitizer": { "removeJsonKeys": ["cost", "remain_money"] },
       "routes": [
         {
-          "id": "live",
           "path": "/v1/live/*",
           "methods": ["GET"],
           "pricing": { "request": "0.0025" },
           "headers": { "x-api-key": "route-specific-key" }
         },
-        { "id": "status", "path": "/v1/status", "methods": ["GET"], "pricing": { "request": "0.0001" } }
+        { "path": "/v1/status", "methods": ["GET"], "pricing": { "request": "0.0001" } }
       ],
       "assetSymbol": "pathUSD",
       "assetAddress": "0x20c0000000000000000000000000000000000000",
@@ -103,7 +102,7 @@ HTTP upstream APIs are configured with `apis`:
 
 That publishes the API at the root mount, so `/v1/quote` forwards to the matching upstream path without an `/api/{id}` prefix.
 Traditional HTTP APIs use fixed per-request `tempo.charge` billing. They do not use native mppx session channels.
-`bearer` injects `Authorization: Bearer ...` upstream and `headers` injects arbitrary upstream headers, matching the common `mppx/proxy` `Service.custom` options. `responseSanitizer.removeJsonKeys` strips JSON fields from upstream responses before returning them to customers; by default it removes `cost` and `remain_money`. Route `pricing.request`, `bearer`, and `headers` values override the API default. Route paths support exact matches, OpenAPI templates such as `/v1/users/{id}`, prefix wildcards such as `/v1/live/*`, and `*` as a catch-all; the most specific matching route wins. Set `allowUnmatchedRoutes: false` or `ROUTE_ALLOWLIST=true` when you want an imported OpenAPI route list to act as the public allowlist. Set a route price to `"0"` (compact env: `POST:/path=0`) for free passthrough with no payment challenge.
+`bearer` injects `Authorization: Bearer ...` upstream and `headers` injects arbitrary upstream headers, matching the common `mppx/proxy` `Service.custom` options. `responseSanitizer.removeJsonKeys` strips JSON fields from upstream responses before returning them to customers; by default it removes `cost` and `remain_money`. Route `pricing.request`, `bearer`, and `headers` values override the API default. Route paths support exact matches, OpenAPI templates such as `/v1/users/{id}`, prefix wildcards such as `/v1/live/*`, and `*` as a catch-all; the most specific matching route wins. Route `id` is optional and is derived from the unique route path when omitted. Set `allowUnmatchedRoutes: false` or `ROUTE_ALLOWLIST=true` when you want an imported OpenAPI route list to act as the public allowlist. Set a route price to `"0"` (compact env: `POST:/path=0`) for free passthrough with no payment challenge.
 
 If the upstream API runs directly on the same VPS host while this node runs in Docker, you can set `UPSTREAM_BASE_URL=http://localhost:8000`. At runtime the Docker app maps localhost-style upstream URLs to `host.docker.internal` so the container reaches the host service.
 

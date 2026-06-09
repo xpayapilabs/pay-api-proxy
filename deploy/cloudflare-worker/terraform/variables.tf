@@ -162,9 +162,17 @@ variable "worker_observability_traces_persist" {
 }
 
 variable "pay_api_proxy_config" {
-  description = "PAY_API_PROXY_CONFIG JSON/JSONC string. Put apis[], route prices, upstream auth, and per-API rate limits here."
+  description = "PAY_API_PROXY_CONFIG JSON/JSONC string. Put apis[], route prices, upstream auth, and per-API rate limits here. Mutually exclusive with pay_api_proxy_config_path."
   type        = string
+  default     = null
+  nullable    = true
   sensitive   = true
+}
+
+variable "pay_api_proxy_config_path" {
+  description = "Path to a PAY_API_PROXY_CONFIG JSON/JSONC file. Relative paths are resolved from this Terraform folder. Mutually exclusive with pay_api_proxy_config."
+  type        = string
+  default     = null
 }
 
 variable "extra_plain_text_bindings" {
