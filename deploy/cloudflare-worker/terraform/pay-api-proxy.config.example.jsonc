@@ -1,6 +1,8 @@
 {
   // Global fallback rate limit. Individual APIs can override this.
   "rateLimit": { "max": 120, "timeWindowMs": 60000 },
+  // For Cloudflare Worker favicons, prefer Terraform favicon_path plus
+  // PAY_API_PROXY_FAVICON_PATH at build time, not base64 in this config.
   "apis": [
     {
       "id": "fx",

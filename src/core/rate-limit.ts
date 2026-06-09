@@ -16,7 +16,11 @@ export interface RateLimitRule {
 
 export function isRateLimitExempt(url: string): boolean {
   const path = url.split("?")[0];
-  return path === "/health" || path === "/pricing" || path.startsWith("/admin/calls") || path.startsWith("/.well-known/");
+  return path === "/health" ||
+    path === "/favicon.ico" ||
+    path === "/pricing" ||
+    path.startsWith("/admin/calls") ||
+    path.startsWith("/.well-known/");
 }
 
 export function rateLimitForRequest(config: AppConfig, url: string): RateLimitRule {

@@ -13,14 +13,19 @@ locals {
   openapi_document_paths            = { for api_id, document_path in var.openapi_document_paths : api_id => trimspace(document_path) }
   openapi_document_path_abs         = { for api_id, document_path in local.openapi_document_paths : api_id => startswith(document_path, "/") ? document_path : abspath("${path.module}/${document_path}") }
   openapi_document_path_exists      = { for api_id, document_path in local.openapi_document_path_abs : api_id => fileexists(document_path) }
-  embedded_openapi_documents        = { for api_id, document_path in local.openapi_document_path_abs : api_id => file(document_path) if local.openapi_document_path_exists[api_id] }
-  worker_embeds_openapi_documents   = length(var.openapi_document_paths) > 0
-  worker_script_content = local.worker_embeds_openapi_documents ? join("\n", [
-    file(local.worker_bundle_path),
-    "",
-    "globalThis.__PAY_API_PROXY_OPENAPI_DOCUMENTS = ${jsonencode(local.embedded_openapi_documents)};",
-    ""
-  ]) : null
+  openapi_document_hashes           = { for api_id, document_path in local.openapi_document_path_abs : api_id => filesha256(document_path) if local.openapi_document_path_exists[api_id] }
+  openapi_documents_configured      = length(var.openapi_document_paths) > 0
+  favicon_path                      = var.favicon_path == null ? null : trimspace(var.favicon_path)
+  favicon_path_set                  = local.favicon_path == null ? false : local.favicon_path != ""
+  favicon_path_abs                  = local.favicon_path_set ? (startswith(local.favicon_path, "/") ? local.favicon_path : abspath("${path.module}/${local.favicon_path}")) : null
+  favicon_path_exists               = local.favicon_path_set ? fileexists(local.favicon_path_abs) : true
+  favicon_hash                      = local.favicon_path_set ? (local.favicon_path_exists ? filesha256(local.favicon_path_abs) : "") : ""
+  worker_bundle_content             = local.openapi_documents_configured || local.favicon_path_set ? file(local.worker_bundle_path) : ""
+  worker_bundle_has_openapi_documents = local.openapi_documents_configured ? alltrue([
+    for api_id, document_hash in local.openapi_document_hashes :
+    strcontains(local.worker_bundle_content, document_hash)
+  ]) : true
+  worker_bundle_has_favicon = local.favicon_path_set ? strcontains(local.worker_bundle_content, local.favicon_hash) : true
 
   # One knob: var.network picks the whole Tempo chain preset. Individual tempo_* vars
   # still override when set. The Worker derives mppx.testnet from the chain id (4217 = live).
@@ -155,9 +160,8 @@ resource "cloudflare_workers_script" "pay_api_proxy" {
   account_id          = var.cloudflare_account_id
   script_name         = var.worker_name
   main_module         = "worker.js"
-  content             = local.worker_embeds_openapi_documents ? local.worker_script_content : null
-  content_file        = local.worker_embeds_openapi_documents ? null : local.worker_bundle_path
-  content_sha256      = local.worker_embeds_openapi_documents ? sha256(local.worker_script_content) : filesha256(local.worker_bundle_path)
+  content_file        = local.worker_bundle_path
+  content_sha256      = filesha256(local.worker_bundle_path)
   content_type        = "application/javascript+module"
   compatibility_date  = var.compatibility_date
   compatibility_flags = var.compatibility_flags
@@ -200,6 +204,21 @@ resource "cloudflare_workers_script" "pay_api_proxy" {
     precondition {
       condition     = alltrue(values(local.openapi_document_path_exists))
       error_message = "Every openapi_document_paths value must point to an existing JSON/JSONC file. Relative paths are resolved from the Terraform folder."
+    }
+
+    precondition {
+      condition     = local.favicon_path_exists
+      error_message = "favicon_path must point to an existing favicon file. Relative paths are resolved from the Terraform folder."
+    }
+
+    precondition {
+      condition     = local.worker_bundle_has_openapi_documents
+      error_message = "The Worker bundle does not contain the configured OpenAPI document hashes. Rebuild from the repo root with PAY_API_PROXY_OPENAPI_DOCUMENT_PATHS='{\"api_id\":\"deploy/cloudflare-worker/terraform/api.openapi.json\"}' npm run build:worker:cloudflare, then run terraform apply again."
+    }
+
+    precondition {
+      condition     = local.worker_bundle_has_favicon
+      error_message = "The Worker bundle does not contain the configured favicon hash. Rebuild from the repo root with PAY_API_PROXY_FAVICON_PATH='deploy/cloudflare-worker/terraform/favicon.svg' npm run build:worker:cloudflare, then run terraform apply again."
     }
   }
 }

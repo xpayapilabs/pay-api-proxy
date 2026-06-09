@@ -586,12 +586,13 @@ async function publicOpenApiDocumentForApi(
     const publicPath = stripInternalServicePrefix(path, prefix);
     const configuredPath = toConfiguredOpenApiPath(publicPath, api);
     paths[prefixed ? prefixedOpenApiPath(api, configuredPath) : configuredPath] =
-      annotatePaidOpenApiOperationsWithApiId(value, api.id);
+      annotatePaidOpenApiOperationsWithApiId(value, api, config);
   }
 
   return {
     document: {
       ...document,
+      info: openApiInfoWithGuidance(document.info, api),
       servers: [{ url: publicBaseUrl }],
       paths
     },
@@ -624,7 +625,11 @@ function prefixOpenApiPaths(api: TraditionalApiConfig, paths: Record<string, unk
   return prefixed;
 }
 
-function annotatePaidOpenApiOperationsWithApiId(pathItemValue: unknown, apiId: string): unknown {
+function annotatePaidOpenApiOperationsWithApiId(
+  pathItemValue: unknown,
+  api: TraditionalApiConfig,
+  config: AppConfig
+): unknown {
   if (!isRecord(pathItemValue)) return pathItemValue;
   const pathItem = { ...pathItemValue };
   for (const [methodKey, operation] of Object.entries(pathItem)) {
@@ -632,7 +637,8 @@ function annotatePaidOpenApiOperationsWithApiId(pathItemValue: unknown, apiId: s
     if (!isRecord(operation["x-payment-info"])) continue;
     pathItem[methodKey] = {
       ...operation,
-      "x-xpayapi-api-id": apiId
+      "x-xpayapi-api-id": api.id,
+      "x-payment-info": paymentInfoWithDiscoveryFields(operation["x-payment-info"], api, config)
     };
   }
   return pathItem;
@@ -727,9 +733,23 @@ function importedOpenApiDocument(
 
   return {
     ...document,
+    info: openApiInfoWithGuidance(document.info, api),
     servers: [{ url: publicBaseUrl }],
     paths: prefixed ? prefixOpenApiPaths(api, paths) : paths
   };
+}
+
+function openApiInfoWithGuidance(value: unknown, api: TraditionalApiConfig): Record<string, unknown> {
+  const info = isRecord(value) ? { ...value } : {};
+  if (typeof info["x-guidance"] !== "string" || info["x-guidance"].trim().length === 0) {
+    info["x-guidance"] = `Use this paid API through the documented routes. Send the JSON request body shown by each operation schema; paid operations return HTTP 402 with an MPP payment challenge before successful access.`;
+  }
+  if (!isRecord(info.contact)) {
+    info.contact = {
+      url: `${api.upstreamBaseUrl.replace(/\/+$/, "")}`
+    };
+  }
+  return info;
 }
 
 function paidOpenApiOperation(
@@ -743,7 +763,7 @@ function paidOpenApiOperation(
     ? { ...(operation.responses as Record<string, unknown>) }
     : {};
   if (!responses["402"]) {
-    responses["402"] = { description: "Payment required" };
+    responses["402"] = { description: "Payment Required" };
   }
   return {
     ...operation,
@@ -773,18 +793,71 @@ function routePaymentInfo(
   requestPrice: bigint,
   routeId?: string
 ): Record<string, unknown> {
-  return {
+  const description = routeId ? `${api.id}:${routeId}` : api.id;
+  return paymentInfoWithDiscoveryFields({
     offers: [{
       amount: requestPrice.toString(),
       chainId: api.chainId,
       currency: api.assetAddress,
       decimals: config.tempo.assetDecimals,
-      description: routeId ? `${api.id}:${routeId}` : api.id,
+      description,
       intent: "charge",
       method: "tempo",
       recipient: config.tempo.settlementAddress
     }]
+  }, api, config, requestPrice);
+}
+
+function paymentInfoWithDiscoveryFields(
+  paymentInfo: Record<string, unknown>,
+  api: TraditionalApiConfig,
+  config: AppConfig,
+  requestPrice?: bigint
+): Record<string, unknown> {
+  const firstOffer = Array.isArray(paymentInfo.offers) && isRecord(paymentInfo.offers[0])
+    ? paymentInfo.offers[0]
+    : undefined;
+  const rawAmount = requestPrice ?? rawOfferAmount(firstOffer);
+  const decimals = typeof firstOffer?.decimals === "number" && Number.isInteger(firstOffer.decimals) && firstOffer.decimals >= 0
+    ? firstOffer.decimals
+    : config.tempo.assetDecimals;
+  const currency = typeof firstOffer?.currency === "string" && firstOffer.currency.length > 0
+    ? firstOffer.currency
+    : api.assetAddress;
+  const method = typeof firstOffer?.method === "string" && firstOffer.method.length > 0
+    ? firstOffer.method
+    : "tempo";
+  const intent = typeof firstOffer?.intent === "string" && firstOffer.intent.length > 0
+    ? firstOffer.intent
+    : "charge";
+
+  return {
+    ...paymentInfo,
+    ...(!isRecord(paymentInfo.price) && rawAmount !== undefined ? {
+      price: {
+        mode: "fixed",
+        currency: "USD",
+        amount: rawAmountToDecimalString(rawAmount, decimals)
+      }
+    } : {}),
+    ...(!Array.isArray(paymentInfo.protocols) ? {
+      protocols: [{
+        mpp: {
+          method,
+          intent,
+          currency
+        }
+      }]
+    } : {})
   };
+}
+
+function rawOfferAmount(offer: Record<string, unknown> | undefined): bigint | undefined {
+  const amount = offer?.amount;
+  if (typeof amount === "bigint") return amount;
+  if (typeof amount === "number" && Number.isInteger(amount) && amount >= 0) return BigInt(amount);
+  if (typeof amount === "string" && /^\d+$/.test(amount)) return BigInt(amount);
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

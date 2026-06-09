@@ -15,6 +15,7 @@ import { sendOpenAiError } from "./errors.js";
 import { createRequestTracker, type RequestTracker } from "./request-tracker.js";
 import { buildPricingPayload } from "../core/pricing.js";
 import { isRateLimitExempt, rateLimitForRequest } from "../core/rate-limit.js";
+import { faviconResponse } from "../core/favicon.js";
 import {
   createTraditionalMppxProxy,
   toFetchRequest,
@@ -85,6 +86,15 @@ export function buildApp(deps: AppDeps) {
       status: "OK",
       message: "Server is running"
     };
+  });
+
+  app.get("/favicon.ico", async (_request, reply) => {
+    const response = faviconResponse(deps.config);
+    if (!response) {
+      reply.status(404).send("");
+      return;
+    }
+    await sendFetchResponse(reply, response);
   });
 
   app.get("/v1/models", async (request, reply) => {

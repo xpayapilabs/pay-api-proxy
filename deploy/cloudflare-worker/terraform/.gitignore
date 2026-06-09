@@ -10,4 +10,8 @@ pay-api-proxy.config*.jsonc
 !pay-api-proxy.config.example.jsonc
 *.openapi.json
 *.openapi.jsonc
+*.ico
+*.png
+*.svg
+favicon.*
 .*

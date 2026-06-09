@@ -3,6 +3,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { ChargingMethodName } from "../charging/types.js";
 import { DEFAULT_APP_SETTINGS } from "./default-config.js";
+import {
+  DEFAULT_FAVICON_CACHE_CONTROL,
+  DEFAULT_FAVICON_CONTENT_TYPE,
+  normalizeFaviconBase64,
+  type FaviconConfig
+} from "./favicon.js";
 import { parseJsoncObject } from "./jsonc.js";
 import { DEFAULT_MODELS, type ModelConfig } from "./models.js";
 import { parseRequestRewriteConfig, type RequestRewriteConfig } from "./request-rewrite.js";
@@ -33,6 +39,7 @@ export interface AppConfig {
   nodeSigningSecret: string;
   corsAllowOrigin: string;
   maxRequestBodyBytes: number;
+  favicon?: FaviconConfig;
   upstreamProvider: UpstreamProviderName;
   chargingMethod: ChargingMethodName;
   sessionBilling: SessionBillingConfig;
@@ -207,6 +214,13 @@ interface ConfigFileSettings {
     max?: number;
     imageMax?: number;
     timeWindowMs?: number;
+  };
+  favicon?: {
+    path?: string;
+    base64?: string;
+    dataBase64?: string;
+    contentType?: string;
+    cacheControl?: string;
   };
   openaiBaseUrl?: string;
   openaiEndpointWhitelist?: OpenAiCompatibleEndpoint[];
@@ -575,6 +589,56 @@ function parseRateLimitConfig(fileConfig: ConfigFileSettings): RateLimitConfig {
     env("RATE_LIMIT_IMAGE_MAX", String(configured.imageMax ?? Math.max(1, Math.floor(max / 6))))
   );
   return { max, imageMax, timeWindowMs };
+}
+
+function parseFaviconConfig(fileConfig: ConfigFileSettings): FaviconConfig | undefined {
+  const configured = fileConfig.favicon;
+  if (configured === undefined) return undefined;
+  if (!configured || typeof configured !== "object" || Array.isArray(configured)) {
+    throw new Error("favicon must be an object");
+  }
+
+  const record = configured as Record<string, unknown>;
+  const path = optionalStringValueFrom(record, "favicon.path", "path");
+  const base64 = optionalStringValueFrom(record, "favicon.base64", "base64");
+  const dataBase64 = optionalStringValueFrom(record, "favicon.dataBase64", "dataBase64");
+  if (path && (base64 || dataBase64)) {
+    throw new Error("favicon must set only one of path, base64, or dataBase64");
+  }
+  if (base64 && dataBase64) {
+    throw new Error("favicon must set only one of base64 or dataBase64");
+  }
+
+  const rawData = base64 ?? dataBase64 ?? readFaviconFile(path);
+  return {
+    contentType: optionalStringValueFrom(record, "favicon.contentType", "contentType") ??
+      faviconContentType(path),
+    dataBase64: normalizeFaviconBase64(path ? "favicon.path" : "favicon.base64", rawData),
+    cacheControl: optionalStringValueFrom(record, "favicon.cacheControl", "cacheControl") ??
+      DEFAULT_FAVICON_CACHE_CONTROL
+  };
+}
+
+function readFaviconFile(path: string | undefined): string {
+  if (!path) {
+    throw new Error("favicon must define base64, dataBase64, or path");
+  }
+  try {
+    return readFileSync(resolve(path), "base64");
+  } catch (error) {
+    throw new Error(
+      `favicon.path could not be read: ${error instanceof Error ? error.message : "unknown error"}`
+    );
+  }
+}
+
+function faviconContentType(path: string | undefined): string {
+  const lower = path?.toLowerCase();
+  if (lower?.endsWith(".png")) return "image/png";
+  if (lower?.endsWith(".svg")) return "image/svg+xml";
+  if (lower?.endsWith(".gif")) return "image/gif";
+  if (lower?.endsWith(".jpg") || lower?.endsWith(".jpeg")) return "image/jpeg";
+  return DEFAULT_FAVICON_CONTENT_TYPE;
 }
 
 function parseOpenAiEndpointWhitelist(value: string | undefined): OpenAiCompatibleEndpoint[] {
@@ -1330,6 +1394,7 @@ export function loadConfig(): AppConfig {
       "MAX_REQUEST_BODY_BYTES",
       env("MAX_REQUEST_BODY_BYTES", String(fileConfig.maxRequestBodyBytes ?? DEFAULT_APP_SETTINGS.maxRequestBodyBytes))
     ),
+    favicon: parseFaviconConfig(fileConfig),
     upstreamProvider,
     chargingMethod: parseChargingMethod(env("CHARGING_METHOD", fileConfig.chargingMethod ?? DEFAULT_APP_SETTINGS.chargingMethod)),
     sessionBilling: parseSessionBillingConfig(fileConfig),
@@ -1390,6 +1455,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     nodeSigningSecret: "test-secret",
     corsAllowOrigin: DEFAULT_APP_SETTINGS.corsAllowOrigin,
     maxRequestBodyBytes: DEFAULT_APP_SETTINGS.maxRequestBodyBytes,
+    favicon: undefined,
     upstreamProvider: "openai",
     chargingMethod: DEFAULT_APP_SETTINGS.chargingMethod,
     sessionBilling: {

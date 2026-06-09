@@ -114,6 +114,28 @@ async function startOpenApiDocumentServer(document: Record<string, unknown>): Pr
 }
 
 describe("API integration", () => {
+  it("serves configured favicon at the server root", async () => {
+    const harness = buildHarness({
+      favicon: {
+        contentType: "image/x-icon",
+        dataBase64: Buffer.from("ICO").toString("base64"),
+        cacheControl: "public, max-age=300"
+      }
+    });
+
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/favicon.ico"
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toBe("image/x-icon");
+    expect(response.headers["cache-control"]).toBe("public, max-age=300");
+    expect(response.body).toBe("ICO");
+
+    await harness.close();
+  });
+
   it("rejects chat completions without x-mpp-session-id with session_required", async () => {
     const harness = buildHarness();
 
@@ -241,7 +263,12 @@ describe("API integration", () => {
 
     const openapi = await harness.app.inject({ method: "GET", url: "/openapi.json" });
     expect(openapi.statusCode).toBe(200);
-    expect(openapi.json().paths["/*"].post["x-payment-info"].offers[0]).toMatchObject({
+    const fallbackPaymentInfo = openapi.json().paths["/*"].post["x-payment-info"];
+    expect(fallbackPaymentInfo).toMatchObject({
+      price: { mode: "fixed", currency: "USD", amount: "0.0005" },
+      protocols: [{ mpp: { method: "tempo", intent: "charge", currency: "0x20c0000000000000000000000000000000000000" } }]
+    });
+    expect(fallbackPaymentInfo.offers[0]).toMatchObject({
       amount: "500",
       currency: "0x20c0000000000000000000000000000000000000",
       intent: "charge",
@@ -671,9 +698,14 @@ describe("API integration", () => {
     expect(openapi.statusCode).toBe(200);
     const document = openapi.json();
     expect(document.info.title).toBe("Weather API");
+    expect(document.info["x-guidance"]).toContain("paid API");
     expect(document.servers).toEqual([{ url: harness.config.publicBaseUrl }]);
     expect(document.paths["/v1/forecast/{city}"].get.summary).toBe("Forecast by city");
-    expect(document.paths["/v1/forecast/{city}"].get.responses["402"]).toEqual({ description: "Payment required" });
+    expect(document.paths["/v1/forecast/{city}"].get.responses["402"]).toEqual({ description: "Payment Required" });
+    expect(document.paths["/v1/forecast/{city}"].get["x-payment-info"]).toMatchObject({
+      price: { mode: "fixed", currency: "USD", amount: "0.0025" },
+      protocols: [{ mpp: { method: "tempo", intent: "charge", currency: "0x20c0000000000000000000000000000000000000" } }]
+    });
     expect(document.paths["/v1/forecast/{city}"].get["x-payment-info"].offers[0]).toMatchObject({
       amount: "2500",
       currency: "0x20c0000000000000000000000000000000000000",
@@ -816,6 +848,11 @@ describe("API integration", () => {
     const openapi = await harness.app.inject({ method: "GET", url: "/openapi.json" });
     expect(openapi.statusCode).toBe(200);
     expect(openapi.json().info.title).toBe("Embedded Docs");
+    expect(openapi.json().info["x-guidance"]).toContain("paid API");
+    expect(openapi.json().paths["/v1/quote"].get["x-payment-info"]).toMatchObject({
+      price: { mode: "fixed", currency: "USD", amount: "0.00075" },
+      protocols: [{ mpp: { method: "tempo", intent: "charge", currency: "0x20c0000000000000000000000000000000000000" } }]
+    });
     expect(openapi.json().paths["/v1/quote"].get["x-payment-info"].offers[0].amount).toBe("750");
 
     await harness.close();

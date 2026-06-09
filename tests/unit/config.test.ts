@@ -125,6 +125,50 @@ describe("config", () => {
     expect(() => loadConfig()).toThrow(/MAX_REQUEST_BODY_BYTES/);
   });
 
+  it("loads favicon config from base64 or a local path", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-favicon-"));
+    const faviconPath = join(directory, "favicon.ico");
+    const configPath = join(directory, "pay-api-proxy.config.jsonc");
+    writeFileSync(faviconPath, "ICO");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        favicon: {
+          path: faviconPath,
+          cacheControl: "public, max-age=300"
+        }
+      })
+    );
+
+    process.env.PAY_API_PROXY_CONFIG = configPath;
+
+    const config = loadConfig();
+    expect(config.favicon).toEqual({
+      contentType: "image/x-icon",
+      dataBase64: Buffer.from("ICO").toString("base64"),
+      cacheControl: "public, max-age=300"
+    });
+
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        favicon: {
+          base64: Buffer.from("PNG").toString("base64"),
+          contentType: "image/png"
+        }
+      })
+    );
+
+    const base64Config = loadConfig();
+    expect(base64Config.favicon).toEqual({
+      contentType: "image/png",
+      dataBase64: Buffer.from("PNG").toString("base64"),
+      cacheControl: "public, max-age=86400"
+    });
+
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("loads secrets from *_FILE paths", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-config-"));
     const signingSecretPath = join(directory, "node_signing_secret");
@@ -607,6 +651,67 @@ describe("config", () => {
       title: "Embedded Weather",
       version: "1.0.0"
     });
+  });
+
+  it("loads Cloudflare Worker favicon config from base64", () => {
+    const config = loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_CONFIG: `{
+        "favicon": {
+          "base64": "${Buffer.from("ICO").toString("base64")}",
+          "contentType": "image/x-icon",
+          "cacheControl": "public, max-age=300"
+        }
+      }`
+    });
+
+    expect(config.favicon).toEqual({
+      contentType: "image/x-icon",
+      dataBase64: Buffer.from("ICO").toString("base64"),
+      cacheControl: "public, max-age=300"
+    });
+  });
+
+  it("loads Cloudflare Worker embedded favicon when config omits favicon", () => {
+    const previous = (globalThis as typeof globalThis & {
+      __PAY_API_PROXY_FAVICON?: unknown;
+    }).__PAY_API_PROXY_FAVICON;
+    (globalThis as typeof globalThis & {
+      __PAY_API_PROXY_FAVICON?: unknown;
+    }).__PAY_API_PROXY_FAVICON = {
+      dataBase64: Buffer.from("<svg/>").toString("base64"),
+      contentType: "image/svg+xml",
+      cacheControl: "public, max-age=600"
+    };
+
+    try {
+      const config = loadCloudflareWorkerConfig({
+        MPP_SECRET_KEY: "worker-secret",
+        PUBLIC_BASE_URL: "https://api.example.com",
+        PAY_API_PROXY_CONFIG: "{}"
+      });
+
+      expect(config.favicon).toEqual({
+        contentType: "image/svg+xml",
+        dataBase64: Buffer.from("<svg/>").toString("base64"),
+        cacheControl: "public, max-age=600"
+      });
+    } finally {
+      (globalThis as typeof globalThis & {
+        __PAY_API_PROXY_FAVICON?: unknown;
+      }).__PAY_API_PROXY_FAVICON = previous;
+    }
+  });
+
+  it("rejects Cloudflare Worker favicon paths", () => {
+    expect(() => loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_CONFIG: `{
+        "favicon": { "path": "./favicon.ico" }
+      }`
+    })).toThrow(/does not support favicon\.path/);
   });
 
   it("rejects Cloudflare Worker OpenAPI URL when an embedded document is configured for the same API", () => {

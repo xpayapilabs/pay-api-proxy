@@ -8,6 +8,12 @@ import type {
 } from "../../core/config.js";
 import { routeIdFromPath } from "../../core/config.js";
 import { DEFAULT_APP_SETTINGS } from "../../core/default-config.js";
+import {
+  DEFAULT_FAVICON_CACHE_CONTROL,
+  DEFAULT_FAVICON_CONTENT_TYPE,
+  normalizeFaviconBase64,
+  type FaviconConfig
+} from "../../core/favicon.js";
 import { parseJsoncObject } from "../../core/jsonc.js";
 import { parseRequestRewriteConfig } from "../../core/request-rewrite.js";
 import { DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS } from "../../core/response-sanitizer.js";
@@ -28,6 +34,9 @@ export interface CloudflareWorkerConfigEnv {
 const API_ID_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 const DEFAULT_FORWARDED_HEADERS = ["accept", "content-type"];
 
+declare const __PAY_API_PROXY_EMBEDDED_OPENAPI_DOCUMENTS__: unknown;
+declare const __PAY_API_PROXY_EMBEDDED_FAVICON__: unknown;
+
 export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppConfig {
   const fileConfig = env.PAY_API_PROXY_CONFIG
     ? parseJsoncObject(env.PAY_API_PROXY_CONFIG, "PAY_API_PROXY_CONFIG")
@@ -35,6 +44,7 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
   const embeddedOpenApiDocuments = parseEmbeddedOpenApiDocuments(
     env.PAY_API_PROXY_OPENAPI_DOCUMENTS ?? embeddedOpenApiDocumentsGlobal()
   );
+  const embeddedFavicon = parseEmbeddedFavicon(embeddedFaviconGlobal());
   const tempo = parseTempoConfig(fileConfig, env);
   const nodeEnv = stringField(fileConfig, "nodeEnv", "production");
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? stringField(
@@ -58,6 +68,7 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
       "maxRequestBodyBytes",
       DEFAULT_APP_SETTINGS.maxRequestBodyBytes
     ),
+    favicon: parseFaviconConfig(fileConfig, embeddedFavicon),
     upstreamProvider: "http",
     chargingMethod: "per-request",
     sessionBilling: {
@@ -83,9 +94,23 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
 }
 
 function embeddedOpenApiDocumentsGlobal(): unknown {
-  return (globalThis as typeof globalThis & {
+  const globalDocuments = (globalThis as typeof globalThis & {
     __PAY_API_PROXY_OPENAPI_DOCUMENTS?: unknown;
   }).__PAY_API_PROXY_OPENAPI_DOCUMENTS;
+  if (globalDocuments !== undefined) return globalDocuments;
+  return typeof __PAY_API_PROXY_EMBEDDED_OPENAPI_DOCUMENTS__ === "undefined"
+    ? undefined
+    : __PAY_API_PROXY_EMBEDDED_OPENAPI_DOCUMENTS__;
+}
+
+function embeddedFaviconGlobal(): unknown {
+  const globalFavicon = (globalThis as typeof globalThis & {
+    __PAY_API_PROXY_FAVICON?: unknown;
+  }).__PAY_API_PROXY_FAVICON;
+  if (globalFavicon !== undefined) return globalFavicon;
+  return typeof __PAY_API_PROXY_EMBEDDED_FAVICON__ === "undefined"
+    ? undefined
+    : __PAY_API_PROXY_EMBEDDED_FAVICON__;
 }
 
 const TEMPO_MAINNET_CHAIN_ID = 4217;
@@ -144,6 +169,63 @@ function parseRateLimitConfig(fileConfig: Record<string, unknown>): RateLimitCon
     max,
     imageMax: positiveIntField(configured, "imageMax", Math.max(1, Math.floor(max / 6))),
     timeWindowMs: positiveIntField(configured, "timeWindowMs", 60_000)
+  };
+}
+
+function parseFaviconConfig(
+  fileConfig: Record<string, unknown>,
+  embeddedFavicon: FaviconConfig | undefined
+): FaviconConfig | undefined {
+  const value = fileConfig.favicon;
+  if (value === undefined) return embeddedFavicon;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("favicon must be an object");
+  }
+
+  const configured = value as Record<string, unknown>;
+  if (optionalStringField(configured, "path")) {
+    throw new Error("Cloudflare Worker config does not support favicon.path; use favicon.base64");
+  }
+  const base64 = optionalStringField(configured, "base64");
+  const dataBase64 = optionalStringField(configured, "dataBase64");
+  if (base64 && dataBase64) {
+    throw new Error("favicon must set only one of base64 or dataBase64");
+  }
+  const rawData = base64 ?? dataBase64;
+  if (!rawData && !embeddedFavicon) {
+    throw new Error("favicon.base64 is required in Cloudflare Worker config");
+  }
+
+  return {
+    contentType: stringField(
+      configured,
+      "contentType",
+      embeddedFavicon?.contentType ?? DEFAULT_FAVICON_CONTENT_TYPE
+    ),
+    dataBase64: rawData
+      ? normalizeFaviconBase64("favicon.base64", rawData)
+      : embeddedFavicon!.dataBase64,
+    cacheControl: stringField(
+      configured,
+      "cacheControl",
+      embeddedFavicon?.cacheControl ?? DEFAULT_FAVICON_CACHE_CONTROL
+    )
+  };
+}
+
+function parseEmbeddedFavicon(value: unknown): FaviconConfig | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("embedded favicon must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  return {
+    contentType: stringField(record, "contentType", DEFAULT_FAVICON_CONTENT_TYPE),
+    dataBase64: normalizeFaviconBase64(
+      "embedded favicon dataBase64",
+      requiredStringField(record, "dataBase64", "embedded favicon dataBase64")
+    ),
+    cacheControl: stringField(record, "cacheControl", DEFAULT_FAVICON_CACHE_CONTROL)
   };
 }
 

@@ -1,5 +1,6 @@
 import type { Store } from "mppx/server";
 import { parseRefundStatus, type PaidCallRefundUpdate } from "../../core/audit.js";
+import { faviconResponse } from "../../core/favicon.js";
 import { createPaidHttpProxy, type PaidHttpProxy } from "../../core/paid-http/proxy.js";
 import { buildPricingPayload } from "../../core/pricing.js";
 import { consumeAtomicRateLimit, isRateLimitExempt, rateLimitForRequest } from "../../core/rate-limit.js";
@@ -96,8 +97,20 @@ async function servePlatformRoute(
   proxy: PaidHttpProxy
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
+  if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/favicon.ico") {
+    const response = faviconResponse(config);
+    if (!response) return new Response(null, { status: 404 });
+    if (request.method === "HEAD") {
+      return new Response(null, {
+        status: response.status,
+        headers: response.headers
+      });
+    }
+    return response;
+  }
+
   if (request.method === "GET" && url.pathname === "/health") {
-    return Response.json({ status: "OK", message: "Worker is running" });
+    return Response.json({ status: "OK", message: "Server is running" });
   }
 
   if (request.method === "GET" && url.pathname === "/.well-known/mpp") {

@@ -52,6 +52,28 @@ pay_api_proxy_config_path = "pay-api-proxy.config.jsonc"
 
 Relative paths are resolved from this Terraform folder. Use `apis[]` for multiple upstreams, with per-route prices and optional per-API rate limits.
 
+If a discovery checker asks for `/favicon.ico`, keep the icon as a private local file and embed it in the Worker bundle. Do not put favicon base64 in `pay-api-proxy.config.jsonc`; Cloudflare text bindings are small and the config can exceed the limit.
+
+```hcl
+favicon_path = "favicon.svg"
+```
+
+Then rebuild from the repo root with the same path before applying:
+
+```bash
+PAY_API_PROXY_FAVICON_PATH='deploy/cloudflare-worker/terraform/favicon.svg' \
+  npm run build:worker:cloudflare
+```
+
+The content type is inferred from the extension. Override it only when needed:
+
+```bash
+PAY_API_PROXY_FAVICON_PATH='deploy/cloudflare-worker/terraform/favicon.svg' \
+PAY_API_PROXY_FAVICON_CONTENT_TYPE='image/svg+xml' \
+PAY_API_PROXY_FAVICON_CACHE_CONTROL='public, max-age=86400' \
+  npm run build:worker:cloudflare
+```
+
 Inline heredoc config is still supported with `pay_api_proxy_config = <<JSONC ... JSONC`, but set exactly one of `pay_api_proxy_config` or `pay_api_proxy_config_path`.
 
 To embed OpenAPI documents in the Worker, put the JSON/JSONC file next to these Terraform files and map it by API id:
@@ -62,9 +84,25 @@ openapi_document_paths = {
 }
 ```
 
-The key must match `apis[].id`. When embedded this way, do not set `apis[].openApiDocumentUrl` for the same API. Terraform appends the document content to the Worker script at deploy time, so it avoids Cloudflare's small environment-binding size limit. Terraform state still contains the generated script content.
+The key must match `apis[].id`. When embedded this way, do not set `apis[].openApiDocumentUrl` for the same API. Build the Worker bundle with the same documents before running Terraform:
+
+```bash
+cd /path/to/pay-api-proxy
+PAY_API_PROXY_OPENAPI_DOCUMENT_PATHS='{"fx":"deploy/cloudflare-worker/terraform/fx.openapi.json"}' \
+  npm run build:worker:cloudflare
+```
+
+Terraform verifies that the built Worker bundle contains the configured OpenAPI document hashes, then uploads the bundle through `content_file`. This avoids Cloudflare's small environment-binding size limit and avoids Terraform rendering a giant script diff.
 
 Use `extra_secret_text_bindings` for vendor API keys referenced by `requestRewrite`, for example `{ "key": { "env": "VENDOR_FX_API_KEY" } }`.
+
+When using both embedded OpenAPI and an embedded favicon, include both build environment variables in the same build:
+
+```bash
+PAY_API_PROXY_OPENAPI_DOCUMENT_PATHS='{"fx":"deploy/cloudflare-worker/terraform/fx.openapi.json"}' \
+PAY_API_PROXY_FAVICON_PATH='deploy/cloudflare-worker/terraform/favicon.svg' \
+  npm run build:worker:cloudflare
+```
 
 Due to a Cloudflare Terraform provider Worker bindings sensitivity bug, this module deploys scalar Worker environment values as JSON string bindings instead of native `text` or `secret_text` bindings. The Worker still receives strings in `env.*`, but these values are not Cloudflare-native Worker secrets. Protect Terraform state and restrict Cloudflare account access.
 
@@ -94,6 +132,7 @@ Keep personal deploy values in ignored local files, not in files that are pushed
 - `terraform.tfvars`: Cloudflare account/zone IDs, Worker name, public domain, wallet address, mppx secret, vendor API keys, and private upstream configuration.
 - `pay-api-proxy.config.jsonc`: private upstream URLs, route prices, request rewrites, response sanitizers, and per-API rate limits loaded by `pay_api_proxy_config_path`.
 - `*.openapi.json` / `*.openapi.jsonc`: optional private OpenAPI documents loaded by `openapi_document_paths`.
+- `favicon.*`: optional private favicon embedded by `PAY_API_PROXY_FAVICON_PATH` and checked by `favicon_path`.
 - `terraform.tfstate*`: Terraform state and backups. These can contain `mpp_secret_key`, `PAY_API_PROXY_CONFIG`, and vendor API key bindings.
 - `.terraform/`: Terraform provider/plugin cache and local backend metadata.
 - `*.auto.tfvars`: optional local override files for personal experiments.
@@ -106,6 +145,7 @@ For a private deployment profile, keep a separate copy such as:
 ~/pay-api-proxy-private/cloudflare-worker/terraform.tfvars
 ~/pay-api-proxy-private/cloudflare-worker/pay-api-proxy.config.jsonc
 ~/pay-api-proxy-private/cloudflare-worker/fx.openapi.json
+~/pay-api-proxy-private/cloudflare-worker/favicon.svg
 ```
 
 Then copy it into this folder before applying:
@@ -114,6 +154,7 @@ Then copy it into this folder before applying:
 cp ~/pay-api-proxy-private/cloudflare-worker/terraform.tfvars deploy/cloudflare-worker/terraform/terraform.tfvars
 cp ~/pay-api-proxy-private/cloudflare-worker/pay-api-proxy.config.jsonc deploy/cloudflare-worker/terraform/pay-api-proxy.config.jsonc
 cp ~/pay-api-proxy-private/cloudflare-worker/fx.openapi.json deploy/cloudflare-worker/terraform/fx.openapi.json
+cp ~/pay-api-proxy-private/cloudflare-worker/favicon.svg deploy/cloudflare-worker/terraform/favicon.svg
 ```
 
 Do not put real Cloudflare account IDs, zone IDs, domains, upstream URLs, API keys, or wallet private keys in this README or in `*.example` files.
@@ -160,7 +201,7 @@ terraform apply -var='deployment_phase=normal'
 
 ## Remote state (do this before production)
 
-`MPP_SECRET_KEY`, `PAY_API_PROXY_CONFIG`, and embedded OpenAPI document contents are deployed through Terraform bindings, so Terraform state contains those values in cleartext. This is true whether `PAY_API_PROXY_CONFIG` comes from inline `pay_api_proxy_config` or from `pay_api_proxy_config_path`. The default local `terraform.tfstate` is fine for testing only.
+`MPP_SECRET_KEY` and `PAY_API_PROXY_CONFIG` are deployed through Terraform bindings, so Terraform state contains those values in cleartext. This is true whether `PAY_API_PROXY_CONFIG` comes from inline `pay_api_proxy_config` or from `pay_api_proxy_config_path`. Embedded OpenAPI documents are included in the Worker bundle, not in a binding. The default local `terraform.tfstate` is fine for testing only.
 
 Before a real deploy, configure a private, encrypted, access-controlled backend. `versions.tf` contains a ready-to-uncomment Cloudflare R2 (S3-compatible) `backend "s3"` block. Fill it in, then:
 

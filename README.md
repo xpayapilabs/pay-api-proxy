@@ -32,6 +32,20 @@ npm run dev
 
 Keep `pay-api-proxy.config.jsonc` small: it should contain operator choices like provider and charging method. Defaults such as ports, body limits, OpenAI base URL, and Tempo testnet constants live in code defaults unless the operator truly needs to override them.
 
+To satisfy discovery crawlers that require a root favicon, Node/container deployments can add `favicon` to `pay-api-proxy.config.jsonc`:
+
+```jsonc
+{
+  "favicon": {
+    "contentType": "image/x-icon",
+    "base64": "<base64 from: base64 -w0 favicon.ico>",
+    "cacheControl": "public, max-age=86400"
+  }
+}
+```
+
+Node/container deployments may instead use `"path": "./favicon.ico"` in the same block. Cloudflare Worker deployments should embed the icon in the Worker bundle with `PAY_API_PROXY_FAVICON_PATH` instead of putting base64 in `PAY_API_PROXY_CONFIG`, because Cloudflare text bindings have a small size limit.
+
 Supported `chargingMethod` values:
 
 - `ai-token`: quote from estimated input tokens plus requested max output tokens, then record actual token usage.

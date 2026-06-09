@@ -189,6 +189,12 @@ variable "openapi_document_paths" {
   }
 }
 
+variable "favicon_path" {
+  description = "Optional favicon file path embedded in the Worker bundle and served from /favicon.ico. Relative paths are resolved from this Terraform folder."
+  type        = string
+  default     = null
+}
+
 variable "extra_plain_text_bindings" {
   description = "Additional non-secret Worker JSON string bindings, for example feature flags used by PAY_API_PROXY_CONFIG."
   type        = map(string)
