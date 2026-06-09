@@ -14,6 +14,7 @@ import { DEFAULT_RESPONSE_SANITIZER_REMOVE_JSON_KEYS } from "../../core/response
 
 export interface CloudflareWorkerConfigEnv {
   PAY_API_PROXY_CONFIG?: string;
+  PAY_API_PROXY_OPENAPI_DOCUMENTS?: unknown;
   PUBLIC_BASE_URL?: string;
   MPP_SECRET_KEY?: string;
   TEMPO_RPC_URL?: string;
@@ -31,6 +32,9 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
   const fileConfig = env.PAY_API_PROXY_CONFIG
     ? parseJsoncObject(env.PAY_API_PROXY_CONFIG, "PAY_API_PROXY_CONFIG")
     : {};
+  const embeddedOpenApiDocuments = parseEmbeddedOpenApiDocuments(
+    env.PAY_API_PROXY_OPENAPI_DOCUMENTS ?? embeddedOpenApiDocumentsGlobal()
+  );
   const tempo = parseTempoConfig(fileConfig, env);
   const nodeEnv = stringField(fileConfig, "nodeEnv", "production");
   const publicBaseUrl = (env.PUBLIC_BASE_URL ?? stringField(
@@ -71,11 +75,17 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
     },
     openaiBaseUrl: DEFAULT_APP_SETTINGS.openaiBaseUrl,
     openaiEndpointWhitelist: [...DEFAULT_APP_SETTINGS.openaiEndpointWhitelist],
-    apis: parseApis(fileConfig.apis, tempo.assetDecimals, tempo, env),
+    apis: parseApis(fileConfig.apis, tempo.assetDecimals, tempo, env, embeddedOpenApiDocuments),
     models: [],
     rateLimit: parseRateLimitConfig(fileConfig),
     tempo
   };
+}
+
+function embeddedOpenApiDocumentsGlobal(): unknown {
+  return (globalThis as typeof globalThis & {
+    __PAY_API_PROXY_OPENAPI_DOCUMENTS?: unknown;
+  }).__PAY_API_PROXY_OPENAPI_DOCUMENTS;
 }
 
 const TEMPO_MAINNET_CHAIN_ID = 4217;
@@ -141,12 +151,13 @@ function parseApis(
   value: unknown,
   assetDecimals: number,
   tempo: AppConfig["tempo"],
-  env: CloudflareWorkerConfigEnv
+  env: CloudflareWorkerConfigEnv,
+  embeddedOpenApiDocuments: Map<string, Record<string, unknown>>
 ): TraditionalApiConfig[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("apis must be an array");
 
-  const apis = value.map((entry, index) => parseApi(entry, index, assetDecimals, tempo, env));
+  const apis = value.map((entry, index) => parseApi(entry, index, assetDecimals, tempo, env, embeddedOpenApiDocuments));
   const enabledIds = new Set<string>();
   for (const api of apis) {
     if (!API_ID_PATTERN.test(api.id)) {
@@ -164,7 +175,8 @@ function parseApi(
   index: number,
   assetDecimals: number,
   tempo: AppConfig["tempo"],
-  env: CloudflareWorkerConfigEnv
+  env: CloudflareWorkerConfigEnv,
+  embeddedOpenApiDocuments: Map<string, Record<string, unknown>>
 ): TraditionalApiConfig {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     throw new Error(`apis[${index}] must be an object`);
@@ -176,16 +188,23 @@ function parseApi(
   if (openApiDocumentPath) {
     throw new Error("Cloudflare Worker config does not support apis[].openApiDocumentPath; use openApiDocumentUrl");
   }
+  const id = requiredStringField(api, "id", `apis[${index}].id`);
+  const embeddedOpenApiDocument = embeddedOpenApiDocuments.get(id);
+  const openApiDocumentUrl = optionalUrlField(api, "openApiDocumentUrl", `apis[${index}].openApiDocumentUrl`);
+  if (embeddedOpenApiDocument && openApiDocumentUrl) {
+    throw new Error(`apis[${index}] must not set openApiDocumentUrl when PAY_API_PROXY_OPENAPI_DOCUMENTS includes ${id}`);
+  }
 
   return {
-    id: requiredStringField(api, "id", `apis[${index}].id`),
+    id,
     upstreamBaseUrl: requiredUrlField(api, "upstreamBaseUrl", `apis[${index}].upstreamBaseUrl`),
     enabled: booleanField(api, "enabled", true),
     methods,
     requestPrice: priceField(api, `apis[${index}]`, assetDecimals),
     routes,
     allowUnmatchedRoutes: booleanField(api, "allowUnmatchedRoutes", routes.length === 0),
-    openApiDocumentUrl: optionalUrlField(api, "openApiDocumentUrl", `apis[${index}].openApiDocumentUrl`),
+    openApiDocument: embeddedOpenApiDocument,
+    openApiDocumentUrl,
     assetSymbol: stringField(api, "assetSymbol", "USDC"),
     assetAddress: stringField(api, "assetAddress", tempo.acceptedAsset),
     chainId: positiveIntField(api, "chainId", tempo.chainId),
@@ -201,6 +220,30 @@ function parseApi(
     bearer: optionalStringField(api, "bearer"),
     headers: optionalHeaders(api, `apis[${index}].headers`)
   };
+}
+
+function parseEmbeddedOpenApiDocuments(value: unknown): Map<string, Record<string, unknown>> {
+  const parsed = typeof value === "string" && value.trim().length > 0
+    ? parseJsoncObject(value, "PAY_API_PROXY_OPENAPI_DOCUMENTS")
+    : value;
+  if (parsed === undefined || parsed === null || parsed === "") return new Map();
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("PAY_API_PROXY_OPENAPI_DOCUMENTS must be a JSON object keyed by api id");
+  }
+  const documents = new Map<string, Record<string, unknown>>();
+  for (const [apiId, documentValue] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!API_ID_PATTERN.test(apiId)) {
+      throw new Error("PAY_API_PROXY_OPENAPI_DOCUMENTS keys must be URL-safe lowercase API ids");
+    }
+    const document = typeof documentValue === "string"
+      ? parseJsoncObject(documentValue, `PAY_API_PROXY_OPENAPI_DOCUMENTS.${apiId}`)
+      : documentValue;
+    if (!document || typeof document !== "object" || Array.isArray(document)) {
+      throw new Error(`PAY_API_PROXY_OPENAPI_DOCUMENTS.${apiId} must be an OpenAPI JSON object or JSON string`);
+    }
+    documents.set(apiId, document as Record<string, unknown>);
+  }
+  return documents;
 }
 
 function routesField(

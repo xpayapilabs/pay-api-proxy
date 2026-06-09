@@ -10,6 +10,17 @@ locals {
   pay_api_proxy_config_source_count = (local.pay_api_proxy_config_inline_set ? 1 : 0) + (local.pay_api_proxy_config_path_set ? 1 : 0)
   pay_api_proxy_config_from_path    = local.pay_api_proxy_config_path_set && local.pay_api_proxy_config_path_exists ? file(local.pay_api_proxy_config_path_abs) : null
   pay_api_proxy_config              = local.pay_api_proxy_config_source_count == 1 && local.pay_api_proxy_config_from_path != null ? local.pay_api_proxy_config_from_path : coalesce(var.pay_api_proxy_config, "")
+  openapi_document_paths            = { for api_id, document_path in var.openapi_document_paths : api_id => trimspace(document_path) }
+  openapi_document_path_abs         = { for api_id, document_path in local.openapi_document_paths : api_id => startswith(document_path, "/") ? document_path : abspath("${path.module}/${document_path}") }
+  openapi_document_path_exists      = { for api_id, document_path in local.openapi_document_path_abs : api_id => fileexists(document_path) }
+  embedded_openapi_documents        = { for api_id, document_path in local.openapi_document_path_abs : api_id => file(document_path) if local.openapi_document_path_exists[api_id] }
+  worker_embeds_openapi_documents   = length(var.openapi_document_paths) > 0
+  worker_script_content = local.worker_embeds_openapi_documents ? join("\n", [
+    file(local.worker_bundle_path),
+    "",
+    "globalThis.__PAY_API_PROXY_OPENAPI_DOCUMENTS = ${jsonencode(local.embedded_openapi_documents)};",
+    ""
+  ]) : null
 
   # One knob: var.network picks the whole Tempo chain preset. Individual tempo_* vars
   # still override when set. The Worker derives mppx.testnet from the chain id (4217 = live).
@@ -144,8 +155,9 @@ resource "cloudflare_workers_script" "pay_api_proxy" {
   account_id          = var.cloudflare_account_id
   script_name         = var.worker_name
   main_module         = "worker.js"
-  content_file        = local.worker_bundle_path
-  content_sha256      = filesha256(local.worker_bundle_path)
+  content             = local.worker_embeds_openapi_documents ? local.worker_script_content : null
+  content_file        = local.worker_embeds_openapi_documents ? null : local.worker_bundle_path
+  content_sha256      = local.worker_embeds_openapi_documents ? sha256(local.worker_script_content) : filesha256(local.worker_bundle_path)
   content_type        = "application/javascript+module"
   compatibility_date  = var.compatibility_date
   compatibility_flags = var.compatibility_flags
@@ -183,6 +195,11 @@ resource "cloudflare_workers_script" "pay_api_proxy" {
     precondition {
       condition     = local.pay_api_proxy_config_path_exists
       error_message = "pay_api_proxy_config_path must point to an existing JSON/JSONC file. Relative paths are resolved from the Terraform folder."
+    }
+
+    precondition {
+      condition     = alltrue(values(local.openapi_document_path_exists))
+      error_message = "Every openapi_document_paths value must point to an existing JSON/JSONC file. Relative paths are resolved from the Terraform folder."
     }
   }
 }

@@ -93,6 +93,7 @@ export interface TraditionalApiConfig {
   requestPrice: bigint;
   routes: TraditionalApiRouteConfig[];
   allowUnmatchedRoutes?: boolean;
+  openApiDocument?: Record<string, unknown>;
   openApiDocumentPath?: string;
   openApiDocumentUrl?: string;
   assetSymbol: string;

@@ -8,4 +8,6 @@ crash.log
 crash.*.log
 pay-api-proxy.config*.jsonc
 !pay-api-proxy.config.example.jsonc
+*.openapi.json
+*.openapi.jsonc
 .*

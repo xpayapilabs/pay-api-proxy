@@ -175,6 +175,20 @@ variable "pay_api_proxy_config_path" {
   default     = null
 }
 
+variable "openapi_document_paths" {
+  description = "Map of apis[].id to OpenAPI JSON/JSONC file paths to embed in the Worker. Relative paths are resolved from this Terraform folder."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for api_id, path in var.openapi_document_paths :
+      can(regex("^[a-z0-9][a-z0-9_-]*$", api_id)) && trimspace(path) != ""
+    ])
+    error_message = "openapi_document_paths keys must be URL-safe lowercase API ids and values must be non-empty paths."
+  }
+}
+
 variable "extra_plain_text_bindings" {
   description = "Additional non-secret Worker JSON string bindings, for example feature flags used by PAY_API_PROXY_CONFIG."
   type        = map(string)

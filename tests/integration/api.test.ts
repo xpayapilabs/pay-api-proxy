@@ -780,6 +780,48 @@ describe("API integration", () => {
     await openApiServer.close();
   });
 
+  it("serves an embedded OpenAPI document and injects payment info", async () => {
+    const upstream = await startTraditionalUpstream();
+    const harness = buildHarness({
+      upstreamProvider: "http",
+      apis: [{
+        id: "quotes",
+        upstreamBaseUrl: upstream.baseUrl,
+        enabled: true,
+        methods: ["GET"],
+        requestPrice: 500n,
+        routes: [
+          { id: "quote", path: "/v1/quote", methods: ["GET"], requestPrice: 750n }
+        ],
+        openApiDocument: {
+          openapi: "3.0.3",
+          info: { title: "Embedded Docs", version: "1.0.0" },
+          paths: {
+            "/v1/quote": {
+              get: {
+                summary: "Get quote",
+                responses: { "200": { description: "OK" } }
+              }
+            }
+          }
+        },
+        forwardedHeaders: ["accept", "content-type"],
+        upstreamTimeoutMs: 30_000,
+        assetSymbol: "pathUSD",
+        assetAddress: "0x20c0000000000000000000000000000000000000",
+        chainId: 42431
+      }]
+    });
+
+    const openapi = await harness.app.inject({ method: "GET", url: "/openapi.json" });
+    expect(openapi.statusCode).toBe(200);
+    expect(openapi.json().info.title).toBe("Embedded Docs");
+    expect(openapi.json().paths["/v1/quote"].get["x-payment-info"].offers[0].amount).toBe("750");
+
+    await harness.close();
+    await upstream.close();
+  });
+
   it("prefers an OpenAPI document URL over a local path when both are configured", async () => {
     const upstream = await startTraditionalUpstream();
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-openapi-path-"));

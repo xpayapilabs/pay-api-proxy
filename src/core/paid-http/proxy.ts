@@ -541,6 +541,17 @@ async function publicOpenApiDocumentForApi(
   if (api.openApiDocumentUrl) {
     return importedOpenApiDocumentFromUrl(api, config, publicBaseUrl, prefixed, deps.fetch);
   }
+  if (api.openApiDocument) {
+    return {
+      document: importedOpenApiDocument(
+        api,
+        config,
+        publicBaseUrl,
+        api.openApiDocument,
+        prefixed
+      )
+    };
+  }
   if (api.openApiDocumentPath) {
     if (!deps.loadOpenApiDocument) {
       return Response.json({

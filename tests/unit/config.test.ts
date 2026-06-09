@@ -583,6 +583,50 @@ describe("config", () => {
     ]);
   });
 
+  it("loads Cloudflare Worker embedded OpenAPI documents by API id", () => {
+    const config = loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_OPENAPI_DOCUMENTS: JSON.stringify({
+        weather: {
+          openapi: "3.0.3",
+          info: { title: "Embedded Weather", version: "1.0.0" },
+          paths: { "/v1/forecast": { get: { responses: { "200": { description: "OK" } } } } }
+        }
+      }),
+      PAY_API_PROXY_CONFIG: `{
+        "apis": [{
+          "id": "weather",
+          "upstreamBaseUrl": "https://weather.example",
+          "pricing": { "request": "0.001" }
+        }]
+      }`
+    });
+
+    expect(config.apis[0].openApiDocument?.info).toEqual({
+      title: "Embedded Weather",
+      version: "1.0.0"
+    });
+  });
+
+  it("rejects Cloudflare Worker OpenAPI URL when an embedded document is configured for the same API", () => {
+    expect(() => loadCloudflareWorkerConfig({
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_OPENAPI_DOCUMENTS: JSON.stringify({
+        weather: { openapi: "3.0.3", info: { title: "Embedded", version: "1.0.0" }, paths: {} }
+      }),
+      PAY_API_PROXY_CONFIG: `{
+        "apis": [{
+          "id": "weather",
+          "upstreamBaseUrl": "https://weather.example",
+          "pricing": { "request": "0.001" },
+          "openApiDocumentUrl": "https://docs.example.com/openapi.json"
+        }]
+      }`
+    })).toThrow(/must not set openApiDocumentUrl/);
+  });
+
   it("loads partial per-upstream rate limit configuration", () => {
     const directory = mkdtempSync(join(tmpdir(), "pay-api-proxy-traditional-rate-limit-"));
     const configPath = join(directory, "pay-api-proxy.config.jsonc");

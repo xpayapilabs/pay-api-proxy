@@ -26,3 +26,8 @@ extra_secret_text_bindings = {
 # For real deployments, copy pay-api-proxy.config.example.jsonc to the ignored
 # pay-api-proxy.config.jsonc file, edit it, then point this variable there.
 pay_api_proxy_config_path = "pay-api-proxy.config.example.jsonc"
+
+# Optional: embed OpenAPI docs in the Worker. Keys must match apis[].id.
+# openapi_document_paths = {
+#   fx = "fx.openapi.json"
+# }
