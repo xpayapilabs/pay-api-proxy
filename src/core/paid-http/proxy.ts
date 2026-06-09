@@ -6,6 +6,7 @@ import { refundStatusForPaidCall } from "../audit.js";
 import type { AppConfig, TraditionalApiConfig, TraditionalApiRouteConfig } from "../config.js";
 import { rawAmountToDecimalString } from "../money.js";
 import { applyRequestRewrite, RequestRewriteError } from "../request-rewrite.js";
+import { maybeLogPaidHttpRequest } from "../log.js";
 import { sanitizeJsonResponse } from "../response-sanitizer.js";
 import type { MppxStoreHandle } from "../../ports/mppx-store.js";
 
@@ -122,6 +123,7 @@ export function createPaidHttpProxy(config: AppConfig, deps: PaidHttpProxyDeps):
       const timeout = setTimeout(() => controller.abort(), api.upstreamTimeoutMs);
       const handledRequest = new Request(internalRequest, { signal: controller.signal });
       try {
+        await maybeLogPaidHttpRequest(config, request, { apiId: api.id });
         const response = await sanitizeJsonResponse(await proxy.fetch(handledRequest), api.responseSanitizer);
         await recordTraditionalAuditSafely(deps.auditSink, config, request, handledRequest, response, {
           paymentSuccess: paymentSuccesses.get(handledRequest),

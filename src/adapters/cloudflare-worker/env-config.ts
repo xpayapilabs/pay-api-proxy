@@ -68,6 +68,7 @@ export function loadCloudflareWorkerConfig(env: CloudflareWorkerConfigEnv): AppC
       "maxRequestBodyBytes",
       DEFAULT_APP_SETTINGS.maxRequestBodyBytes
     ),
+    logPaidRequests: parseLogPaidRequests(env, fileConfig),
     favicon: parseFaviconConfig(fileConfig, embeddedFavicon),
     upstreamProvider: "http",
     chargingMethod: "per-request",
@@ -446,6 +447,16 @@ function requiredStringField(record: Record<string, unknown>, field: string, nam
   const value = record[field];
   if (typeof value !== "string" || value.length === 0) throw new Error(`${name} must be a string`);
   return value;
+}
+
+function parseLogPaidRequests(
+  env: CloudflareWorkerConfigEnv,
+  fileConfig: Record<string, unknown>
+): boolean {
+  const fromEnv = env.LOG_PAID_REQUESTS;
+  if (fromEnv === true || fromEnv === "true") return true;
+  if (fromEnv === false || fromEnv === "false") return false;
+  return fileConfig.logPaidRequests === true;
 }
 
 function stringField(record: Record<string, unknown>, field: string, fallback: string): string {

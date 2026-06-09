@@ -39,6 +39,7 @@ export interface AppConfig {
   nodeSigningSecret: string;
   corsAllowOrigin: string;
   maxRequestBodyBytes: number;
+  logPaidRequests: boolean;
   favicon?: FaviconConfig;
   upstreamProvider: UpstreamProviderName;
   chargingMethod: ChargingMethodName;
@@ -191,6 +192,7 @@ interface ConfigFileSettings {
   publicBaseUrl?: string;
   corsAllowOrigin?: string;
   maxRequestBodyBytes?: number;
+  logPaidRequests?: boolean;
   upstreamProvider?: UpstreamProviderName;
   chargingMethod?: ChargingMethodName;
   sessionBilling?: {
@@ -1394,6 +1396,7 @@ export function loadConfig(): AppConfig {
       "MAX_REQUEST_BODY_BYTES",
       env("MAX_REQUEST_BODY_BYTES", String(fileConfig.maxRequestBodyBytes ?? DEFAULT_APP_SETTINGS.maxRequestBodyBytes))
     ),
+    logPaidRequests: optionalBoolEnv("LOG_PAID_REQUESTS") ?? fileConfig.logPaidRequests ?? false,
     favicon: parseFaviconConfig(fileConfig),
     upstreamProvider,
     chargingMethod: parseChargingMethod(env("CHARGING_METHOD", fileConfig.chargingMethod ?? DEFAULT_APP_SETTINGS.chargingMethod)),
@@ -1455,6 +1458,7 @@ export function testConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     nodeSigningSecret: "test-secret",
     corsAllowOrigin: DEFAULT_APP_SETTINGS.corsAllowOrigin,
     maxRequestBodyBytes: DEFAULT_APP_SETTINGS.maxRequestBodyBytes,
+    logPaidRequests: false,
     favicon: undefined,
     upstreamProvider: "openai",
     chargingMethod: DEFAULT_APP_SETTINGS.chargingMethod,

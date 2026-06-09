@@ -1,4 +1,6 @@
+import { vi } from "vitest";
 import { createServer, type Server } from "node:http";
+import * as paidRequestLog from "../../src/core/log.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -437,6 +439,53 @@ describe("API integration", () => {
     expect(resend.statusCode).toBe(200);
     expect(resend.json().body).toEqual({ key: "vendor-key", verifycode: "654321" });
 
+    await harness.close();
+    await upstream.close();
+  });
+
+  it("logs inbound paid HTTP requests when logPaidRequests is enabled", async () => {
+    const logSpy = vi.spyOn(paidRequestLog, "maybeLogPaidHttpRequest");
+    const upstream = await startTraditionalUpstream();
+    const harness = buildHarness({
+      nodeEnv: "development",
+      logPaidRequests: true,
+      upstreamProvider: "http",
+      apis: [{
+        id: "verify",
+        upstreamBaseUrl: upstream.baseUrl,
+        enabled: true,
+        methods: ["POST"],
+        requestPrice: 0n,
+        routes: [
+          { id: "verify-code", path: "/v1/verify", methods: ["POST"], requestPrice: 0n }
+        ],
+        allowUnmatchedRoutes: false,
+        forwardedHeaders: ["content-type"],
+        upstreamTimeoutMs: 30_000,
+        assetSymbol: "pathUSD",
+        assetAddress: "0x20c0000000000000000000000000000000000000",
+        chainId: 42431
+      }]
+    });
+
+    expect(harness.config.logPaidRequests).toBe(true);
+    expect(harness.config.nodeEnv).toBe("development");
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/v1/verify",
+      payload: { keyword: "wx", key: "secret" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(logSpy).toHaveBeenCalledOnce();
+    const [config, request, context] = logSpy.mock.calls[0]!;
+    expect(config.logPaidRequests).toBe(true);
+    expect(request.method).toBe("POST");
+    expect(new URL(request.url).pathname).toBe("/v1/verify");
+    expect(context).toEqual({ apiId: "verify" });
+
+    logSpy.mockRestore();
     await harness.close();
     await upstream.close();
   });

@@ -45,6 +45,7 @@ const SAVED_KEYS = [
   "TEMPO_ACCEPTED_ASSET",
   "MPPX_SESSION_TESTNET",
   "MPPX_SESSION_WAIT_FOR_CONFIRMATION",
+  "LOG_PAID_REQUESTS",
   "MAX_REQUEST_BODY_BYTES",
   "PUBLIC_BASE_URL",
   "DOMAIN_NAME",
@@ -123,6 +124,13 @@ describe("config", () => {
     process.env.NODE_ENV = "development";
     process.env.MAX_REQUEST_BODY_BYTES = "0";
     expect(() => loadConfig()).toThrow(/MAX_REQUEST_BODY_BYTES/);
+  });
+
+  it("loads LOG_PAID_REQUESTS from env", () => {
+    process.env.LOG_PAID_REQUESTS = "true";
+    expect(loadConfig().logPaidRequests).toBe(true);
+    process.env.LOG_PAID_REQUESTS = "false";
+    expect(loadConfig().logPaidRequests).toBe(false);
   });
 
   it("loads favicon config from base64 or a local path", () => {
@@ -602,6 +610,23 @@ describe("config", () => {
     expect(config.apis[0].responseSanitizer).toEqual({
       removeJsonKeys: ["cost", "remain_money", "quota"]
     });
+  });
+
+  it("loads Cloudflare Worker LOG_PAID_REQUESTS from env", () => {
+    const baseEnv = {
+      MPP_SECRET_KEY: "worker-secret",
+      PUBLIC_BASE_URL: "https://api.example.com",
+      PAY_API_PROXY_CONFIG: `{
+        "apis": [{
+          "id": "weather",
+          "upstreamBaseUrl": "https://weather.example",
+          "pricing": { "request": "0.001" }
+        }]
+      }`
+    };
+
+    expect(loadCloudflareWorkerConfig({ ...baseEnv, LOG_PAID_REQUESTS: "true" }).logPaidRequests).toBe(true);
+    expect(loadCloudflareWorkerConfig({ ...baseEnv, LOG_PAID_REQUESTS: "false" }).logPaidRequests).toBe(false);
   });
 
   it("derives Cloudflare Worker route ids from unique route paths when omitted", () => {

@@ -96,6 +96,8 @@ Terraform verifies that the built Worker bundle contains the configured OpenAPI 
 
 Use `extra_secret_text_bindings` for vendor API keys referenced by `requestRewrite`, for example `{ "key": { "env": "VENDOR_FX_API_KEY" } }`.
 
+To debug inbound paid HTTP traffic, set `LOG_PAID_REQUESTS=true` in `extra_plain_text_bindings`. Logs appear in Workers Observability / `wrangler tail` as `[paid-request]` JSON lines with redacted bodies.
+
 When using both embedded OpenAPI and an embedded favicon, include both build environment variables in the same build:
 
 ```bash
